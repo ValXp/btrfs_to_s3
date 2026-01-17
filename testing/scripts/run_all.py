@@ -24,6 +24,11 @@ DEFAULT_CONFIG = os.path.abspath(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the full test harness.")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
+    parser.add_argument(
+        "--skip-s3",
+        action="store_true",
+        help="Skip backup and S3 verification steps.",
+    )
     args = parser.parse_args()
 
     config_path = os.path.abspath(args.config)
@@ -33,17 +38,21 @@ def main() -> int:
     log_path = os.path.join(paths["logs_dir"], "run_all.log")
     os.makedirs(paths["logs_dir"], exist_ok=True)
 
-    steps = [
-        ("setup", "setup_btrfs.py", []),
-        ("seed", "seed_data.py", []),
-        ("full", "run_full.py", []),
-        ("mutate", "mutate_data.py", []),
-        ("incremental", "run_incremental.py", ["--skip-mutate"]),
-        ("interrupt", "run_interrupt.py", []),
-        ("verify_manifest", "verify_manifest.py", []),
-        ("verify_s3", "verify_s3.py", []),
-        ("verify_retention", "verify_retention.py", []),
-    ]
+    steps = [("setup", "setup_btrfs.py", []), ("seed", "seed_data.py", [])]
+    if args.skip_s3:
+        steps.append(("mutate", "mutate_data.py", []))
+    else:
+        steps.extend(
+            [
+                ("full", "run_full.py", []),
+                ("mutate", "mutate_data.py", []),
+                ("incremental", "run_incremental.py", ["--skip-mutate"]),
+                ("interrupt", "run_interrupt.py", []),
+                ("verify_manifest", "verify_manifest.py", []),
+                ("verify_s3", "verify_s3.py", []),
+                ("verify_retention", "verify_retention.py", []),
+            ]
+        )
     teardown_step = ("teardown", "teardown_btrfs.py", [])
 
     success = True

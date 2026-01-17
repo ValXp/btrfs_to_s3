@@ -33,6 +33,7 @@ Quickstart
 2. Edit `testing/config/test.toml` and `testing/config/test.env`.
 3. Run the full harness:
    - `python testing/scripts/run_all.py --config testing/config/test.toml`
+   - Optional: add `--skip-s3` to run local setup/seed/mutate without S3.
 
 Privilege model
 - Run `testing/scripts/setup_btrfs.py` with sudo. It will chown `testing/run/` to

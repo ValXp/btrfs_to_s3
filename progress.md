@@ -1,12 +1,4 @@
-Progress
-- 2026-01-16 21:11 - done - Add testing harness scaffolding
-- 2026-01-16 21:16 - done - Add core harness modules
-- 2026-01-16 21:21 - done - Add harness runner for CLI execution
-- 2026-01-16 21:24 - done - Add Btrfs fixture helpers
-- 2026-01-16 21:27 - done - Add S3 and manifest validation helpers
-- 2026-01-16 21:31 - done - Add Btrfs fixture scripts
-- 2026-01-16 21:33 - done - Add E2E runner scripts
-- 2026-01-16 21:35 - done - Add verification and benchmark scripts
-- 2026-01-16 21:37 - done - Add orchestration and cleanup scripts
-- 2026-01-16 21:38 - done - Add stop marker
-- 2026-01-16 22:40 - done - Chown testing/run to SUDO_USER during setup
+# Progress: btrfs_to_s3 main tool
+
+## Status
+- 2026-01-17 10:34 MST: Added initial design doc and refined implementation plan + tasks (no commit yet).
