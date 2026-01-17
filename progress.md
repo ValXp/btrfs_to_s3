@@ -8,3 +8,4 @@ Progress
 - 2026-01-16 21:33 - done - Add E2E runner scripts
 - 2026-01-16 21:35 - done - Add verification and benchmark scripts
 - 2026-01-16 21:37 - done - Add orchestration and cleanup scripts
+- 2026-01-16 21:38 - done - Add stop marker
