@@ -23,6 +23,7 @@ Configuration
 
 BTRFS_TO_S3_CMD override
 - Optional: set `BTRFS_TO_S3_CMD` in `testing/config/test.env` as a JSON array.
+- The runner expects a JSON array only; shell-style strings are rejected.
 - Example: `["python", "-m", "btrfs_to_s3"]`
 
 Quickstart
@@ -36,3 +37,4 @@ Quickstart
 Notes
 - Btrfs setup/mount steps require root privileges.
 - Logs are written under `testing/run/logs/`.
+- The runner adds the repo root to `PYTHONPATH` if it is not already set.
