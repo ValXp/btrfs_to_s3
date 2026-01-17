@@ -8,3 +8,4 @@
 - 2026-01-17 11:29 MST: Completed Task 2 lock/state storage with tests; commit "Add lock and state modules".
 - 2026-01-17 11:30 MST: Completed Task 3 snapshot manager with retention tests; commit "Add snapshot manager".
 - 2026-01-17 11:32 MST: Completed Task 4 planner cadence/fallback with tests; commit "Add backup planner".
+- 2026-01-17 11:34 MST: Completed Task 5 chunker/streamer with tests; commit "Add stream chunker".
