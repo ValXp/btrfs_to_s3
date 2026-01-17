@@ -1,4 +1,28 @@
 # Progress: btrfs_to_s3 main tool
 
 ## Status
+- 2026-01-17 10:41 MST: Designed main tool architecture and updated plans/tasks; commit "Add main tool design and update plans".
+- 2026-01-17 10:48 MST: Finalized spooling decision (SSD 200 GiB) and updated design/plan/tasks.
+- 2026-01-17 10:49 MST: Set test storage default to STANDARD and updated plans.
+- 2026-01-17 10:51 MST: Added multipart policy and expanded agent-ready task breakdown.
+- 2026-01-17 10:54 MST: Expanded task acceptance criteria and test requirements.
+- 2026-01-17 10:56 MST: Added default Codex args to bypass approvals/sandbox.
+- 2026-01-17 10:58 MST: Removed unsupported --non-interactive from default Codex args.
+- 2026-01-17 10:59 MST: Pass non-interactive flag via positional args in work loop.
+- 2026-01-17 11:00 MST: Switch Codex work loop to use non-interactive exec subcommand.
+- 2026-01-17 11:01 MST: Adjusted work loop to pass prompt positionally for codex exec.
+- 2026-01-17 11:09 MST: Documented Python3 runtime and test completion gate.
+- 2026-01-17 11:13 MST: Added Task 0 for repository scaffolding and test setup.
+- 2026-01-17 11:22 MST: Completed Task 0 scaffolding; commit "Add initial package scaffolding".
+- 2026-01-17 11:23 MST: Removed pycache artifacts and ignored bytecode; commit "Ignore Python bytecode".
+- 2026-01-17 11:27 MST: Completed Task 1 config/CLI/logging with tests; commit "Implement config and CLI".
+- 2026-01-17 11:29 MST: Completed Task 2 lock/state storage with tests; commit "Add lock and state modules".
+- 2026-01-17 11:30 MST: Completed Task 3 snapshot manager with retention tests; commit "Add snapshot manager".
+- 2026-01-17 11:32 MST: Completed Task 4 planner cadence/fallback with tests; commit "Add backup planner".
+- 2026-01-17 11:34 MST: Completed Task 5 chunker/streamer with tests; commit "Add stream chunker".
+- 2026-01-17 11:36 MST: Completed Task 6 S3 uploader with retries and tests; commit "Add S3 uploader".
+- 2026-01-17 11:37 MST: Completed Task 7 manifest/current publish with tests; commit "Add manifest publisher".
+- 2026-01-17 11:38 MST: Completed Task 8 metrics calculations with tests; commit "Add metrics module".
+- 2026-01-17 11:39 MST: Completed Task 9 systemd units and docs; commit "Add systemd units".
+- 2026-01-17 11:40 MST: Blocked on Task 10 integration harness; missing AWS test bucket/prefix credentials. Commit "Add stop marker".
 - 2026-01-17 14:29 MST: Updated test harness config to use python3 and new test bucket/prefix.
