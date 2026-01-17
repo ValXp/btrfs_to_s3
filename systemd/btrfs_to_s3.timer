@@ -1,0 +1,9 @@
+[Unit]
+Description=Run btrfs_to_s3 backups at 2am
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

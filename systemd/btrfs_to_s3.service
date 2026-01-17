@@ -1,0 +1,8 @@
+[Unit]
+Description=Btrfs to S3 backup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -m btrfs_to_s3 backup --config /etc/btrfs_to_s3/config.toml
