@@ -198,4 +198,8 @@ sse = "AES256"
   multipart throughput.
 
 ## Pending decisions (need user input)
-- **Default storage class for test runs:** `STANDARD` vs `STANDARD_IA`.
+None.
+
+## Test storage default
+- Use `STANDARD` for test runs to avoid minimum storage duration and retrieval
+  fees.
