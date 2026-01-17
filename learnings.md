@@ -8,3 +8,5 @@ Learnings
 - FYI: The harness now generates a tool config at testing/run/tool_config.toml and exports BTRFS_TO_S3_HARNESS_RUN_DIR when running the CLI.
 - FYI: AWS uploads require credentials; this environment needed python3-boto3 installed via apt (pip is blocked by PEP 668).
 - FYI: The integration harness requires sudo for loopback/mount operations (run with sudo -n when possible).
+- FYI: Config now includes a restore section; direct Config construction must supply RestoreConfig.
+- FYI: Restore verification uses the manifest snapshot path as its source reference and fails if that path is missing.

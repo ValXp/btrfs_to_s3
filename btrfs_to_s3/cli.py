@@ -19,6 +19,13 @@ from btrfs_to_s3.config import (
     load_config,
     validate_config,
 )
+from btrfs_to_s3.restore import (
+    RestoreError,
+    fetch_current_manifest_key,
+    resolve_manifest_chain,
+    restore_chain,
+    verify_restore,
+)
 from btrfs_to_s3.uploader import S3Uploader
 
 import boto3
@@ -41,6 +48,38 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     backup.add_argument(
         "--no-s3", action="store_true", help="skip S3 uploads for diagnostics"
     )
+
+    restore = subparsers.add_parser("restore", help="restore backup")
+    restore.add_argument("--config", required=True, help="path to config.toml")
+    restore.add_argument("--log-level", help="override log level")
+    restore.add_argument("--subvolume", required=True, help="subvolume name")
+    restore.add_argument("--target", required=True, help="restore target path")
+    restore.add_argument(
+        "--manifest-key", help="override current pointer with manifest key"
+    )
+    restore.add_argument(
+        "--restore-timeout",
+        type=int,
+        help="max seconds to wait for archive restore",
+    )
+    restore.add_argument(
+        "--wait-restore",
+        dest="wait_restore",
+        action="store_true",
+        help="wait for archive restore readiness",
+    )
+    restore.add_argument(
+        "--no-wait-restore",
+        dest="wait_restore",
+        action="store_false",
+        help="skip waiting for archive restore",
+    )
+    restore.add_argument(
+        "--verify",
+        choices=("full", "sample", "none"),
+        help="override restore verification mode",
+    )
+    restore.set_defaults(wait_restore=None)
 
     if argv is None:
         argv = sys.argv[1:]
@@ -75,11 +114,15 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     setup_logging(config.global_cfg.log_level)
     logging.getLogger(__name__).info(
-        "event=backup_start command=%s subvolume_filter=%s",
+        "event=command_start command=%s subvolume_filter=%s",
         args.command,
         args.subvolume,
     )
-    return run_backup(args, config)
+    if args.command == "backup":
+        return run_backup(args, config)
+    if args.command == "restore":
+        return run_restore(args, config)
+    return 2
 
 
 def run_backup(args: argparse.Namespace, config: Config) -> int:
@@ -174,6 +217,7 @@ def _load_and_override_config(args: argparse.Namespace) -> Config:
             snapshots=config.snapshots,
             subvolumes=config.subvolumes,
             s3=config.s3,
+            restore=config.restore,
         )
         validate_config(config)
     return config
@@ -195,3 +239,80 @@ def _parse_level(value: str) -> int:
     if normalized not in mapping:
         raise ConfigError(f"invalid log level: {value}")
     return mapping[normalized]
+
+
+def run_restore(args: argparse.Namespace, config: Config) -> int:
+    logger = logging.getLogger(__name__)
+    if not _has_aws_credentials():
+        logger.error("event=restore_no_credentials status=failed")
+        return 1
+
+    client = boto3.client("s3", region_name=config.s3.region)
+    prefix = config.s3.prefix.rstrip("/")
+    if prefix:
+        prefix = prefix + "/"
+    current_key = f"{prefix}subvol/{args.subvolume}/current.json"
+    manifest_key = args.manifest_key
+    if not manifest_key:
+        try:
+            manifest_key = fetch_current_manifest_key(
+                client, config.s3.bucket, current_key
+            )
+        except RestoreError as exc:
+            logger.error("event=restore_current_failed error=%s", exc)
+            return 1
+
+    try:
+        manifests = resolve_manifest_chain(
+            client, config.s3.bucket, manifest_key
+        )
+    except RestoreError as exc:
+        logger.error("event=restore_manifest_failed error=%s", exc)
+        return 1
+
+    wait_restore = (
+        args.wait_restore
+        if args.wait_restore is not None
+        else config.restore.wait_for_restore
+    )
+    restore_timeout = (
+        args.restore_timeout
+        if args.restore_timeout is not None
+        else config.restore.restore_timeout_seconds
+    )
+    try:
+        restore_chain(
+            client,
+            config.s3.bucket,
+            manifests,
+            Path(args.target).expanduser(),
+            wait_for_restore=wait_restore,
+            restore_tier=config.restore.restore_tier,
+            restore_timeout_seconds=restore_timeout,
+        )
+    except RestoreError as exc:
+        logger.error("event=restore_failed error=%s", exc)
+        return 1
+    verify_mode = (
+        args.verify if args.verify is not None else config.restore.verify_mode
+    )
+    if verify_mode == "none":
+        logger.info("event=restore_verify_skipped mode=none")
+    else:
+        snapshot_path = manifests[-1].snapshot_path if manifests else None
+        if not snapshot_path:
+            logger.error("event=restore_verify_failed error=missing_snapshot")
+            return 1
+        try:
+            verify_restore(
+                Path(snapshot_path),
+                Path(args.target).expanduser(),
+                mode=verify_mode,
+                sample_max_files=config.restore.sample_max_files,
+            )
+        except RestoreError as exc:
+            logger.error("event=restore_verify_failed error=%s", exc)
+            return 1
+        logger.info("event=restore_verify_complete status=ok mode=%s", verify_mode)
+    logger.info("event=restore_complete status=ok")
+    return 0

@@ -56,6 +56,34 @@ class CliTests(unittest.TestCase):
             exit_code = cli.main(["backup", "--config", str(path)])
         self.assertEqual(exit_code, 0)
 
+    def test_parse_restore_args(self) -> None:
+        args = cli.parse_args(
+            [
+                "restore",
+                "--config",
+                "/tmp/config.toml",
+                "--subvolume",
+                "data",
+                "--target",
+                "/srv/restore/data",
+                "--manifest-key",
+                "subvol/data/full/manifest.json",
+                "--restore-timeout",
+                "120",
+                "--no-wait-restore",
+                "--verify",
+                "sample",
+            ]
+        )
+        self.assertEqual(args.command, "restore")
+        self.assertEqual(args.config, "/tmp/config.toml")
+        self.assertEqual(args.subvolume, "data")
+        self.assertEqual(args.target, "/srv/restore/data")
+        self.assertEqual(args.manifest_key, "subvol/data/full/manifest.json")
+        self.assertEqual(args.restore_timeout, 120)
+        self.assertFalse(args.wait_restore)
+        self.assertEqual(args.verify, "sample")
+
 
 if __name__ == "__main__":
     unittest.main()

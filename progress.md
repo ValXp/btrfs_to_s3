@@ -28,3 +28,7 @@
 - 2026-01-17 14:29 MST: Updated test harness config to use python3 and new test bucket/prefix.
 - 2026-01-17 14:32 MST: Added losetup in PATH
 - 2026-01-17 15:05 MST: Completed Task 10 integration harness run and aligned harness/CLI; commit "Complete integration harness run".
+- 2026-01-17 15:12 MST: Added restore + multi-chunk requirements and tasks (post-completion).
+- Next: implement Task 12 restore verification and Task 13 integration harness with restore + multi-chunk.
+- 2026-01-17 16:31 MST: Completed Task 11 restore core with manifest resolution and restore tests; commit "Implement restore core".
+- 2026-01-17 16:38 MST: Completed Task 12 restore verification; commit "Add restore verification".
