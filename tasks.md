@@ -5,6 +5,15 @@
 - A task is only complete if the project builds and unit tests run and pass
   (use `python3`). No exceptions.
 
+### Task 0: Repository scaffolding
+- Define project package layout (e.g., `btrfs_to_s3/` package, `tests/`).
+- Add `pyproject.toml` or `setup.cfg` with dependencies and test config.
+- Document how to run tests and where to add new modules/tests.
+- Acceptance criteria:
+  - Running tests via `python3 -m pytest` succeeds (even if only placeholder tests).
+  - The package can be imported with `python3 -m btrfs_to_s3` (stub ok).
+  - Docs include the expected module/test locations.
+
 ### Task 1: Config + CLI + logging
 - Define config schema and CLI flags in `DESIGN.md`.
 - Implement config loader and validation.
