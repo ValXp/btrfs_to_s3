@@ -1,2 +1,4 @@
 stop.md
 testing/config/test.env
+__pycache__/
+*.pyc
