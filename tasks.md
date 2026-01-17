@@ -101,12 +101,55 @@
   - Units reference config path and run `backup` at 2am local time.
   - Docs include installation, enablement, and log locations.
 
-### Task 10: Integration harness
+### Task 10: Restore core
+- Implement restore command and manifest resolution.
+- Download chunks, verify hashes, and reassemble stream.
+- `btrfs receive` into a new subvolume target path.
+- Handle storage class restore requests and waiting.
+- Tests: unit tests for manifest chain resolution and restore readiness.
+- Acceptance criteria:
+  - CLI `restore` accepts `--subvolume` + `--target` (required) and optional
+    `--manifest-key` (overrides `current.json` lookup).
+  - Manifest resolution for incrementals walks parents back to the most recent
+    full and restores in order; failures list the missing manifest key.
+  - For archival classes, the tool issues `RestoreObject` and waits until
+    `Restore` header indicates readiness (poll with backoff).
+  - `--restore-timeout` enforces a hard upper bound and exits non-zero with a
+    clear error if readiness is not reached.
+  - Chunk downloads verify SHA-256 against manifest and fail fast on mismatch.
+  - `btrfs receive` writes to a brand-new subvolume path and fails if target
+    already exists.
+  - Unit tests cover:
+    - manifest chain resolution ordering
+    - timeout handling
+    - restore readiness parsing for multiple storage classes
+    - hash mismatch failure
+  - Unit test coverage >= 90% where reasonable.
+  - All tests pass (including existing tests).
+
+### Task 11: Restore verification
+- Implement metadata and content validation after restore.
+- Tests: unit tests for verification logic and failure reporting.
+- Acceptance criteria:
+  - Metadata checks verify restored subvolume exists, is writable as expected,
+    and reports a valid UUID from `btrfs subvolume show`.
+  - Content verification mode `full` walks the entire tree and validates file
+    sizes + SHA-256 for every regular file.
+  - Content verification mode `sample` selects a deterministic sample set
+    (stable ordering, capped by config) and validates sizes + SHA-256.
+  - Verification detects mismatched hashes, missing files, or extra files and
+    reports the first discrepancy with the offending path.
+  - Verification can be disabled via config/flag and reports that it was skipped.
+  - Unit test coverage >= 90% where reasonable.
+  - All tests pass (including existing tests).
+
+### Task 12: Integration harness
 - Run existing test harness against AWS test bucket/prefix.
-- Ensure end-to-end run reports success with STANDARD storage class.
+- Ensure end-to-end backup + restore run reports success with STANDARD storage class.
 - Acceptance criteria:
   - Harness run completes without errors.
   - Artifacts uploaded to test prefix with STANDARD storage class.
+  - Restore validation passes for full and incremental runs.
   - Use `testing/config/test.toml` for bucket/prefix and `testing/config/test.env`
     for credentials.
   - Execute via `python3 testing/scripts/run_all.py --config testing/config/test.toml`.

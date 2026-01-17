@@ -29,9 +29,11 @@ Implementation Plan
       run_full.py
       run_incremental.py
       run_interrupt.py
+      run_restore.py
       verify_manifest.py
       verify_s3.py
       verify_retention.py
+      verify_restore.py
       benchmark.py
       cleanup_s3_prefix.py
       run_all.py
@@ -74,17 +76,20 @@ Implementation Plan
   - `run_full.py` runs a full backup via the CLI contract.
   - `run_incremental.py` mutates then runs incremental.
   - `run_interrupt.py` starts a backup, kills it mid-stream, then reruns and verifies proper completion.
+  - `run_restore.py` restores into a new subvolume target.
+  - Restore runner should tolerate storage class restore delays (wait/poll).
 
 - Verification scripts (Python + boto3).
   - `verify_manifest.py` checks schema, chunk ordering, hash fields, backup type.
   - `verify_s3.py` checks object layout, storage class, and SSE-S3 via `head_object`.
   - `verify_retention.py` checks snapshot retention rules on the local fixture.
+  - `verify_restore.py` compares restored data to the source snapshot (metadata + file hashes).
 
 - Benchmarking.
   - `benchmark.py` parses logs to produce `testing/run/logs/benchmark.json` with bytes, elapsed time, and throughput.
 
 - Orchestration.
-  - `run_all.py` sequences: setup -> seed -> full -> mutate -> incremental -> interrupt -> verify -> teardown.
+  - `run_all.py` sequences: setup -> seed -> full -> mutate -> incremental -> interrupt -> restore -> verify -> teardown.
   - `cleanup_s3_prefix.py` removes test objects under the configured prefix.
 
 - Documentation and hygiene.

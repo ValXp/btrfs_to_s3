@@ -2,8 +2,9 @@
 
 ## Scope
 Build the main backup tool that manages Btrfs snapshots, streams `btrfs send`
-output into chunked uploads on S3, and records manifests to enable future
-restore. This plan excludes the test harness (already implemented).
+output into chunked uploads on S3, records manifests, and implements restore
+from S3 back into a new Btrfs subvolume. This plan excludes the test harness
+(already implemented).
 
 ## Inputs
 - Requirements: `requirements.md`
@@ -18,9 +19,11 @@ restore. This plan excludes the test harness (already implemented).
 5. Streamer/chunker + hashing.
 6. S3 uploader with storage class + SSE-S3.
 7. Manifest + pointer publishing (atomic).
-8. Systemd units + docs.
-9. Metrics/benchmarking output.
-10. Tests: unit coverage >= 90% where reasonable + harness integration.
+8. Restore core (manifest resolution, S3 download, reassembly).
+9. Restore verification (Btrfs metadata + content checks).
+10. Systemd units + docs.
+11. Metrics/benchmarking output.
+12. Tests: unit coverage >= 90% where reasonable + harness integration.
 
 ## Detailed steps
 1. Define config schema (TOML) and CLI surface.
@@ -45,10 +48,20 @@ restore. This plan excludes the test harness (already implemented).
    - Update `current.json` via chosen atomic strategy.
 9. Implement metrics output.
    - Total bytes, time, throughput.
-10. Add systemd service/timer and documentation.
-11. Add tests.
+10. Implement restore core.
+   - Resolve manifest from `current.json` or `--manifest-key`.
+   - For incremental chains, resolve parents back to latest full.
+   - Handle storage classes with restore-in-progress and wait logic.
+   - Download chunks, verify SHA-256, reassemble stream.
+   - `btrfs receive` into a new subvolume target path.
+11. Implement restore verification.
+   - Metadata checks (subvolume UUID, snapshot list, read-only flags).
+   - Content verification (full tree or sample, configurable).
+12. Add systemd service/timer and documentation.
+13. Add tests.
    - Unit tests for planner, state, manifest, config, chunking.
-   - Harness integration for end-to-end S3 flow.
+   - Unit tests for restore chain resolution and verification.
+   - Harness integration for end-to-end S3 + restore flow.
 
 ## Risks / open decisions
 ## Risks / open decisions

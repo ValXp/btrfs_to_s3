@@ -127,13 +127,16 @@ The scan helper lives at `scripts/fs_growth_analysis.sh`.
   - ability to override storage class to avoid long minimum-storage penalties during tests
 - Provide a way to benchmark throughput and record basic run stats (bytes sent, time taken).
 
-## Restore (deferred)
+## Restore
 
-- Restoration must be supported as a later milestone:
+- Restoration must be supported:
   - download required chunks
-  - validate integrity
+  - validate integrity (per-chunk hashes and optional stream hash)
   - reassemble the `btrfs send` stream
-  - `btrfs receive` into a target filesystem/subvolume
+  - `btrfs receive` into a new target subvolume path
+  - verify restored data (metadata + file content checks)
+- The tool must transparently handle all S3 storage classes, including
+  archival restore delays.
 
 ## Test Harness Notes
 

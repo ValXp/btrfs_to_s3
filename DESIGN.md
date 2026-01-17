@@ -15,7 +15,8 @@ The tool supports full backups (infrequent) and chained incrementals (weekly).
 - Systemd timer/service for scheduled runs.
 
 ## Non-goals (initial phase)
-- Restore implementation (schema and layout only).
+- Multi-host support.
+- Application-consistent snapshots.
 - Multi-host support.
 - Application-consistent snapshots.
 
@@ -23,11 +24,16 @@ The tool supports full backups (infrequent) and chained incrementals (weekly).
 - All subvolumes live on the same Btrfs filesystem.
 - AWS S3 is the only object store.
 - Btrfs tooling is available (`btrfs send/receive`, `btrfs subvolume`).
+## Restore goals
+- Restore into a brand-new subvolume path that is configurable.
+- Support restoring the latest "current" pointer or a specific manifest key.
+- Validate restored data using both Btrfs metadata and file content checks.
+- Work transparently with any S3 storage class (including archival classes with delays).
 
 ## Architecture
 1. **CLI/Config**
    - Parse TOML config; allow env overrides.
-   - Primary command: `backup`.
+   - Primary commands: `backup`, `restore`.
 2. **Lock**
    - File lock to prevent concurrent runs.
 3. **Snapshot manager**
@@ -48,6 +54,12 @@ The tool supports full backups (infrequent) and chained incrementals (weekly).
    - Local state file for last successful snapshot/manifest per subvolume.
 9. **Metrics**
    - Emit total bytes, throughput, and elapsed time.
+10. **Restore**
+   - Resolve manifest (current pointer or explicit manifest key).
+   - Ensure objects are restored and ready for download (Glacier/Deep Archive).
+   - Download chunks, validate hashes, reassemble stream.
+   - Run `btrfs receive` into target path.
+   - Validate restored data (Btrfs metadata + file content hashes).
 
 ## Data flow per run
 1. Acquire lock.
@@ -61,6 +73,20 @@ The tool supports full backups (infrequent) and chained incrementals (weekly).
    - Update `current.json` for subvolume.
 6. Update local state after success.
 7. Retain/prune snapshots.
+
+## Restore flow
+1. Acquire lock.
+2. Resolve manifest:
+   - If `--manifest-key` provided, use it.
+   - Else resolve `current.json` for the subvolume.
+3. For incremental chains, resolve parent manifests back to the most recent full.
+4. For each manifest in order:
+   - Ensure S3 objects are restored and ready (if archival).
+   - Download chunks and validate SHA-256.
+   - Reassemble stream and `btrfs receive` into the restore target.
+5. Validate restored data:
+   - Btrfs metadata checks (subvolume UUID, read-only flag, snapshot list).
+   - File content checks (hash/size for a deterministic sample or full tree, configurable).
 
 ## Snapshot naming
 - Base directory: configurable (default under the same filesystem).
@@ -105,6 +131,10 @@ The tool supports full backups (infrequent) and chained incrementals (weekly).
     "bucket": "bucket-name",
     "region": "us-east-1",
     "storage_class": "DEEP_ARCHIVE"
+  },
+  "restore": {
+    "stream_sha256": "optional",
+    "chunk_hash_algo": "sha256"
   }
 }
 ```
@@ -158,8 +188,16 @@ The tool supports full backups (infrequent) and chained incrementals (weekly).
 
 ## CLI
 - `btrfs_to_s3 backup --config /path/to/config.toml`
+- `btrfs_to_s3 restore --config /path/to/config.toml --subvolume data --target /restore/data`
 - Flags: `--log-level`, `--dry-run`, `--subvolume` (optional filter),
   `--once` (ignore schedule), `--no-s3` (local only for diagnostics).
+- Restore flags:
+  - `--target` (required): new subvolume path for restore.
+  - `--manifest-key` (optional): explicit manifest to restore.
+  - `--current` (default): restore from `current.json`.
+  - `--wait-restore` (default on): request/await S3 restore for archival storage.
+  - `--restore-timeout` (e.g., `6h`): max time to wait for S3 restore readiness.
+  - `--verify` (default on): run metadata + content verification.
 
 ## Config (TOML, proposed)
 ```
@@ -191,6 +229,14 @@ storage_class_chunks = "DEEP_ARCHIVE"
 storage_class_manifest = "STANDARD"
 concurrency = 4
 sse = "AES256"
+
+[restore]
+target_base_dir = "/srv/restore"
+verify_mode = "full" # full | sample | none
+sample_max_files = 1000
+wait_for_restore = true
+restore_timeout_seconds = 259200
+restore_tier = "Standard"
 ```
 
 Validation rules:

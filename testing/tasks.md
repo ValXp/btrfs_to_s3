@@ -141,7 +141,28 @@ Required files
 Acceptance criteria
 - Each script exits non-zero on failure and writes helpful log output.
 
-Task 9: Orchestration + Cleanup (Agent I)
+Task 9: Restore Scripts + Verification (Agent J)
+Summary
+Implement restore execution and full end-to-end verification.
+
+Required files
+- `testing/scripts/run_restore.py`: restore into a new subvolume target.
+- `testing/scripts/verify_restore.py`: compare restored data to the source snapshot.
+
+Behavior
+- Restore uses `btrfs_to_s3 restore` and a configurable target base path.
+- Restore supports `--manifest-key` override or defaults to `current.json`.
+- Restore waits for archival object readiness, honoring timeout settings.
+- Verification checks both Btrfs metadata and file content hashes.
+- Verification supports `full` and `sample` modes (deterministic sampling).
+
+Acceptance criteria
+- Restore completes and creates a new subvolume under the target path.
+- Restore fails if the target path already exists.
+- Verification fails on any mismatch (missing/extra file, hash mismatch) and reports the first discrepancy.
+- Scripts log to `testing/run/logs/` and exit non-zero on failure.
+
+Task 10: Orchestration + Cleanup (Agent I)
 Summary
 Create a top-level orchestrator and cleanup tool.
 
@@ -151,4 +172,5 @@ Required files
 
 Acceptance criteria
 - `run_all.py` performs teardown even if a step fails (best-effort cleanup).
+- `run_all.py` includes restore + verify in the sequence.
 - `cleanup_s3_prefix.py` requires explicit `--yes` confirmation.
