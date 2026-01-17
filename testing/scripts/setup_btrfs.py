@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import pwd
 
 TESTING_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if TESTING_DIR not in sys.path:
@@ -76,6 +77,17 @@ def main() -> int:
             )
             log.write(f"created subvolumes: {created}")
 
+            _chown_for_user(
+                [
+                    paths["run_dir"],
+                    paths["mount_dir"],
+                    paths["snapshots_dir"],
+                    paths["scratch_dir"],
+                    paths["lock_dir"],
+                ],
+                log,
+            )
+
             with open(loop_device_path, "w", encoding="utf-8") as handle:
                 handle.write(loop_device + "\n")
             log.write(f"stored loop device in {loop_device_path}")
@@ -84,6 +96,31 @@ def main() -> int:
             return 1
 
     return 0
+
+
+def _chown_for_user(paths: list[str], log) -> None:
+    if os.geteuid() != 0:
+        log.write("skipping chown; not running as root")
+        return
+    sudo_user = os.environ.get("SUDO_USER")
+    if not sudo_user:
+        log.write("skipping chown; SUDO_USER not set")
+        return
+    try:
+        user_info = pwd.getpwnam(sudo_user)
+    except KeyError:
+        log.write(f"skipping chown; unknown user {sudo_user}", level="ERROR")
+        return
+    uid = user_info.pw_uid
+    gid = user_info.pw_gid
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        os.chown(path, uid, gid)
+        for root, dirs, files in os.walk(path):
+            for name in dirs + files:
+                os.chown(os.path.join(root, name), uid, gid)
+    log.write(f"chowned paths to {sudo_user}")
 
 
 if __name__ == "__main__":

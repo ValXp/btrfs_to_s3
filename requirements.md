@@ -135,3 +135,7 @@ The scan helper lives at `scripts/fs_growth_analysis.sh`.
   - reassemble the `btrfs send` stream
   - `btrfs receive` into a target filesystem/subvolume
 
+## Test Harness Notes
+
+- The local Btrfs fixture setup requires root; it can chown test directories to `SUDO_USER` so non-root scripts can run afterward.
+- Teardown still requires root to unmount and detach the loop device.

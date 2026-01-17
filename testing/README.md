@@ -34,7 +34,13 @@ Quickstart
 3. Run the full harness:
    - `python testing/scripts/run_all.py --config testing/config/test.toml`
 
+Privilege model
+- Run `testing/scripts/setup_btrfs.py` with sudo. It will chown `testing/run/` to
+  `SUDO_USER` so seed/mutate/verify scripts can run without sudo.
+- Run `testing/scripts/teardown_btrfs.py` with sudo to unmount and detach the loop
+  device.
+
 Notes
-- Btrfs setup/mount steps require root privileges.
+- Btrfs setup/teardown steps require root privileges.
 - Logs are written under `testing/run/logs/`.
 - The runner adds the repo root to `PYTHONPATH` if it is not already set.

@@ -114,6 +114,7 @@ Required files
 
 Acceptance criteria
 - Running setup -> seed -> mutate -> teardown works without touching any path outside `testing/run/`.
+- When run as root, setup should chown `testing/run/` to `SUDO_USER` so later scripts can run unprivileged.
 
 Task 7: E2E Run Scripts (Agent G)
 Summary

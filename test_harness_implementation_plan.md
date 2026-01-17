@@ -65,6 +65,7 @@ Implementation Plan
 
 - Create Btrfs fixture tools (Python scripts).
   - `setup_btrfs.py` creates a loopback image in `testing/run/`, sets up loop device, formats Btrfs, mounts into `testing/run/mnt`, and creates `data/root/home`.
+  - `setup_btrfs.py` should chown `testing/run/` to `SUDO_USER` so non-root scripts can run after setup.
   - `seed_data.py` writes deterministic files (fixed sizes) to each subvolume.
   - `mutate_data.py` makes known changes for incremental runs.
   - `teardown_btrfs.py` unmounts and detaches loop device.

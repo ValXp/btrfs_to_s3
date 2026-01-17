@@ -7,4 +7,5 @@ Loop behavior
 - Upon task completion, make a commit of the changes you made. Do not attempt to push; there is no network access.
 - Ensure all `.md` files are committed as well.
 - Update `progress.md` after each run (done or blocked) with status, date and hour (local time), and commit message (no commit hash).
+- If you change privilege requirements, update `testing/README.md`.
 - If blocked or if all tasks are done, create `stop.md` with a short reason and stop; the loop will end when `stop.md` exists.
