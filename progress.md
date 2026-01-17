@@ -6,3 +6,4 @@ Progress
 - 2026-01-16 21:27 - done - Add S3 and manifest validation helpers
 - 2026-01-16 21:31 - done - Add Btrfs fixture scripts
 - 2026-01-16 21:33 - done - Add E2E runner scripts
+- 2026-01-16 21:35 - done - Add verification and benchmark scripts
