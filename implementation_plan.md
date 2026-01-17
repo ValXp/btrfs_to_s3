@@ -51,6 +51,5 @@ restore. This plan excludes the test harness (already implemented).
 
 ## Risks / open decisions
 ## Risks / open decisions
-- Optional local spooling vs pure streaming.
 - Storage class defaults for tests vs production.
 - Multipart retry strategy (part size, retry count, backoff).

@@ -141,7 +141,8 @@ The tool supports full backups (infrequent) and chained incrementals (weekly).
 - Chunk size configurable (default 200 GiB).
 - Upload concurrency configurable (thread or async worker pool).
 - Use multipart uploads for large chunks to maximize throughput on fast uplinks.
-- Optional local spool directory for buffering if needed.
+- Use a local SSD spool (default 200 GiB) to buffer multipart parts and maximize
+  parallel uploads.
 
 ## Security
 - Use SSE-S3 (AES256) for all uploaded objects.
@@ -158,6 +159,8 @@ The tool supports full backups (infrequent) and chained incrementals (weekly).
 log_level = "info"
 state_path = "~/.local/state/btrfs_to_s3/state.json"
 lock_path = "/var/lock/btrfs_to_s3.lock"
+spool_dir = "/mnt/ssd/btrfs_to_s3_spool"
+spool_size_bytes = 214748364800
 
 [schedule]
 full_every_days = 180
@@ -191,7 +194,8 @@ sse = "AES256"
   final `PutObject` overwrite for `current.json` (S3 object puts are atomic).
 - **Chunk upload method:** multipart uploads for large chunks to maximize speed.
 - **State path:** default to user home under `~/.local/state/btrfs_to_s3/`.
+- **Spooling:** use a local SSD spool (default 200 GiB) to enable high parallel
+  multipart throughput.
 
 ## Pending decisions (need user input)
-- **Spool strategy:** streaming only vs optional spool-to-disk for retries.
 - **Default storage class for test runs:** `STANDARD` vs `STANDARD_IA`.

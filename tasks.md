@@ -1,7 +1,7 @@
 # Tasks: btrfs_to_s3 main tool
 
 ## Todo
-- Finalize remaining design decisions (spooling, test storage class defaults).
+- Finalize remaining design decisions (test storage class defaults).
 - Define config schema + CLI flags (document in README or DESIGN.md).
 - Implement config loader + validation; add unit tests (>=90% coverage where reasonable).
 - Implement logging + exit codes; unit tests for error mapping.
