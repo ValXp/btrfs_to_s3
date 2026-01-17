@@ -13,3 +13,4 @@
 - 2026-01-17 11:37 MST: Completed Task 7 manifest/current publish with tests; commit "Add manifest publisher".
 - 2026-01-17 11:38 MST: Completed Task 8 metrics calculations with tests; commit "Add metrics module".
 - 2026-01-17 11:39 MST: Completed Task 9 systemd units and docs; commit "Add systemd units".
+- 2026-01-17 11:40 MST: Blocked on Task 10 integration harness; missing AWS test bucket/prefix credentials. Commit "Add stop marker".
