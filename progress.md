@@ -11,3 +11,4 @@
 - 2026-01-17 11:34 MST: Completed Task 5 chunker/streamer with tests; commit "Add stream chunker".
 - 2026-01-17 11:36 MST: Completed Task 6 S3 uploader with retries and tests; commit "Add S3 uploader".
 - 2026-01-17 11:37 MST: Completed Task 7 manifest/current publish with tests; commit "Add manifest publisher".
+- 2026-01-17 11:38 MST: Completed Task 8 metrics calculations with tests; commit "Add metrics module".
