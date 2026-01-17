@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "btrfs_to_s3"
+version = "0.1.0"
+description = "Btrfs snapshot backup to S3"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "btrfs_to_s3 maintainers"}]
+
+[tool.setuptools]
+packages = ["btrfs_to_s3"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
