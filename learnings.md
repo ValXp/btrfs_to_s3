@@ -11,3 +11,5 @@ Learnings
 - FYI: Config now includes a restore section; direct Config construction must supply RestoreConfig.
 - FYI: Restore verification uses the manifest snapshot path as its source reference and fails if that path is missing.
 - FYI: Task 13 harness run failed during setup because losetup returned a non-zero exit status (loop device permissions).
+- FYI: Task 13 harness run still requires sudo for losetup; non-interactive sudo is unavailable (password required).
+- FYI: The latest `python3 testing/scripts/run_all.py --config testing/config/test.toml` attempt failed in `setup_btrfs.py` at `losetup --find --show` due to insufficient permissions.
