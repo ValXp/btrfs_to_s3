@@ -1,5 +1,5 @@
 [tool]
-cmd = ["python", "-m", "btrfs_to_s3"]
+cmd = ["python3", "-m", "btrfs_to_s3"]
 config_flag = "--config"
 
 [paths]
@@ -19,8 +19,8 @@ subvolumes = ["data", "root", "home"]
 
 [aws]
 region = "us-east-1"
-bucket = "CHANGE_ME_BUCKET"
-prefix = "CHANGE_ME_PREFIX/"
+bucket = "codex-btrfs-test-bucket"
+prefix = "btrfs-to-s3-test/"
 storage_class = "STANDARD"
 sse = "AES256"
 

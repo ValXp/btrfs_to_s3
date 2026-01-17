@@ -107,5 +107,6 @@
 - Acceptance criteria:
   - Harness run completes without errors.
   - Artifacts uploaded to test prefix with STANDARD storage class.
-  - Any required environment variables are documented.
-
+  - Use `testing/config/test.toml` for bucket/prefix and `testing/config/test.env`
+    for credentials.
+  - Execute via `python3 testing/scripts/run_all.py --config testing/config/test.toml`.
