@@ -1,13 +1,8 @@
-"""Package entrypoint stub."""
+"""Package entrypoint."""
 
 from __future__ import annotations
 
-import sys
-
-
-def main() -> int:
-    print("btrfs_to_s3: backup tooling stub")
-    return 0
+from btrfs_to_s3.cli import main
 
 
 if __name__ == "__main__":

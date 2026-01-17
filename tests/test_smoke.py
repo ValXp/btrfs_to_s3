@@ -7,7 +7,7 @@ import unittest
 from contextlib import redirect_stdout
 
 import btrfs_to_s3
-import btrfs_to_s3.__main__ as main_module
+from btrfs_to_s3 import cli
 
 
 class SmokeTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class SmokeTests(unittest.TestCase):
     def test_main_returns_zero(self) -> None:
         buffer = io.StringIO()
         with redirect_stdout(buffer):
-            self.assertEqual(main_module.main(), 0)
+            self.assertEqual(cli.main([]), 0)
         self.assertIn("btrfs_to_s3", buffer.getvalue())
 
 

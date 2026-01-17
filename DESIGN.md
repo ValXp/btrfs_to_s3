@@ -193,6 +193,12 @@ concurrency = 4
 sse = "AES256"
 ```
 
+Validation rules:
+- Paths must be absolute (after `~` expansion).
+- `chunk_size_bytes`, `spool_size_bytes`, and cadence days must be > 0.
+- `run_at` uses 24-hour `HH:MM` format.
+- `s3.bucket`, `s3.region`, `s3.prefix` are required.
+
 ## Systemd
 - Service: `btrfs_to_s3.service` running `backup`.
 - Timer: `btrfs_to_s3.timer` scheduled at 2am local time.
