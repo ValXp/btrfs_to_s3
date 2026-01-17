@@ -10,3 +10,4 @@ Learnings
 - FYI: The integration harness requires sudo for loopback/mount operations (run with sudo -n when possible).
 - FYI: Config now includes a restore section; direct Config construction must supply RestoreConfig.
 - FYI: Restore verification uses the manifest snapshot path as its source reference and fails if that path is missing.
+- FYI: Task 13 harness run failed during setup because losetup returned a non-zero exit status (loop device permissions).
