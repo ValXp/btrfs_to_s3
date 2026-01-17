@@ -144,6 +144,14 @@ The tool supports full backups (infrequent) and chained incrementals (weekly).
 - Use a local SSD spool (default 200 GiB) to buffer multipart parts and maximize
   parallel uploads.
 
+## Multipart upload policy (default)
+- Part size: 128 MiB.
+- Max in-flight parts: `s3.concurrency` (defaults to 4).
+- Retry: 5 attempts per part with exponential backoff (base 1s, cap 30s) and
+  jitter.
+- Failure: abort multipart upload on exhausted retries; rerun restarts the
+  backup stream from scratch.
+
 ## Security
 - Use SSE-S3 (AES256) for all uploaded objects.
 - Avoid storing credentials in config; prefer env or AWS standard mechanisms.

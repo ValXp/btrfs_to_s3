@@ -38,7 +38,7 @@ restore. This plan excludes the test harness (already implemented).
    - Hash each chunk; collect size and stats.
 7. Implement S3 uploader.
    - Upload chunks with SSE-S3 and storage class controls.
-   - Optional multipart for large chunks.
+   - Multipart policy: 128 MiB parts, 5 retries, exponential backoff with jitter.
 8. Implement manifest builder and publisher.
    - Upload manifest after chunk success.
    - Update `current.json` via chosen atomic strategy.
@@ -51,4 +51,4 @@ restore. This plan excludes the test harness (already implemented).
 
 ## Risks / open decisions
 ## Risks / open decisions
-- Multipart retry strategy (part size, retry count, backoff).
+- Multipart retry behavior under sustained network failures (timeouts, aborts).
