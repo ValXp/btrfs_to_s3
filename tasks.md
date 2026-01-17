@@ -109,6 +109,3 @@
   - Artifacts uploaded to test prefix with STANDARD storage class.
   - Any required environment variables are documented.
 
-## In progress
-
-## Done
