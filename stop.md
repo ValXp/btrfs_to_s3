@@ -1,1 +1,1 @@
-Blocked: Task 10 integration harness requires AWS test bucket/prefix credentials and config.
+Blocked on Task 10 integration harness: `testing/scripts/setup_btrfs.py` requires `losetup`, which is not available in this environment.

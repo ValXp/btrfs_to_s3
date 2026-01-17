@@ -4,3 +4,4 @@ Learnings
 - FYI: `python` is not available in the current shell; use `python3` when running harness commands.
 - FYI: `rg` is not installed in this environment; use `find`/`grep` as fallback.
 - FYI: `pytest` is not available in this environment, so a minimal local `pytest` shim runs `unittest` discovery for `python3 -m pytest`.
+- FYI: `testing/scripts/setup_btrfs.py` currently fails because `losetup` is missing in the environment.
