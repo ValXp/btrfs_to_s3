@@ -23,7 +23,9 @@ fi
 while [[ ! -f "$STOP_FILE" ]]; do
   PROMPT_CONTENT="$(cat "$PROMPT_FILE")"
   read -r -a ARGS <<<"$CODEX_ARGS"
-  if [[ "$CODEX_PROMPT_FLAG" == "-" ]]; then
+  if [[ "${ARGS[*]}" == *" exec"* ]]; then
+    "$CODEX_CMD" "${ARGS[@]}" "$PROMPT_CONTENT" </dev/null
+  elif [[ "$CODEX_PROMPT_FLAG" == "-" ]]; then
     printf '%s' "$PROMPT_CONTENT" | "$CODEX_CMD" "${ARGS[@]}" </dev/null
   else
     "$CODEX_CMD" "${ARGS[@]}" "$CODEX_PROMPT_FLAG" "$PROMPT_CONTENT" </dev/null
