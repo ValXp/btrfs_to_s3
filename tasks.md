@@ -1,6 +1,10 @@
 # Tasks: btrfs_to_s3 main tool
 
 ## Todo
+### Global requirement (applies to all tasks)
+- A task is only complete if the project builds and unit tests run and pass
+  (use `python3`). No exceptions.
+
 ### Task 1: Config + CLI + logging
 - Define config schema and CLI flags in `DESIGN.md`.
 - Implement config loader and validation.

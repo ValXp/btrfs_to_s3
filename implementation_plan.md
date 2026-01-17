@@ -8,6 +8,7 @@ restore. This plan excludes the test harness (already implemented).
 ## Inputs
 - Requirements: `requirements.md`
 - Design: `DESIGN.md`
+- Runtime: Python 3 (invoke via `python3`).
 
 ## Milestones
 1. Configuration + CLI skeleton + logging.
