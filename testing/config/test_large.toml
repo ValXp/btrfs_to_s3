@@ -1,0 +1,33 @@
+[tool]
+cmd = ["python3", "-m", "btrfs_to_s3"]
+config_flag = "--config"
+
+[paths]
+run_dir = "testing/run/large"
+logs_dir = "testing/run/large/logs"
+scratch_dir = "testing/run/large/scratch"
+lock_dir = "testing/run/large/lock"
+btrfs_image = "testing/run/large/btrfs.img"
+mount_dir = "testing/run/large/mnt"
+data_dir = "testing/run/large/mnt/data"
+snapshots_dir = "testing/run/large/snapshots"
+
+[btrfs]
+loopback_size_gib = 4
+mount_options = "compress=zstd"
+subvolumes = ["data", "root", "home"]
+
+[aws]
+region = "us-east-1"
+bucket = "codex-btrfs-test-bucket"
+prefix = "btrfs-to-s3-test/large/"
+storage_class = "STANDARD"
+sse = "AES256"
+
+[backup]
+chunk_size_mib = 1
+concurrency = 4
+retention_snapshots = 2
+
+[dataset]
+size_mib = 16

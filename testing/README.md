@@ -18,6 +18,8 @@ AWS test bucket/prefix guidance
 
 Configuration
 - `testing/config/test.toml` controls harness settings and S3 parameters.
+- `testing/config/test_large.toml` forces multi-chunk uploads with a smaller
+  chunk size and larger dataset defaults.
 - `testing/config/test.env` holds AWS credentials and optional overrides.
 - Set all `CHANGE_ME` values before running tests.
 
@@ -34,6 +36,9 @@ Quickstart
 3. Run the full harness:
    - `python testing/scripts/run_all.py --config testing/config/test.toml`
    - Optional: add `--skip-s3` to run local setup/seed/mutate without S3.
+   - Optional: add `--include-large` to run the multi-chunk scenario.
+4. Run the multi-chunk scenario:
+   - `python testing/scripts/run_large.py --config testing/config/test_large.toml`
 
 Privilege model
 - Run `testing/scripts/setup_btrfs.py` with sudo. It will chown `testing/run/` to

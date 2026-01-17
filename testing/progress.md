@@ -13,3 +13,4 @@ Progress
 - 2026-01-17 15:10 - done - Restore and multi-chunk test design added to harness docs/tasks
 - Next: implement Task 11 (multi-chunk scenario) and Task 12 (orchestration extensions)
 - 2026-01-17 16:11 - done - Add restore run and verification scripts
+- 2026-01-17 16:18 - done - Add multi-chunk scenario and orchestration updates
