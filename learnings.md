@@ -5,3 +5,6 @@ Learnings
 - FYI: `rg` is not installed in this environment; use `find`/`grep` as fallback.
 - FYI: `pytest` is not available in this environment, so a minimal local `pytest` shim runs `unittest` discovery for `python3 -m pytest`.
 - FYI: `testing/scripts/setup_btrfs.py` currently fails because `losetup` is missing in the environment.
+- FYI: The harness now generates a tool config at testing/run/tool_config.toml and exports BTRFS_TO_S3_HARNESS_RUN_DIR when running the CLI.
+- FYI: AWS uploads require credentials; this environment needed python3-boto3 installed via apt (pip is blocked by PEP 668).
+- FYI: The integration harness requires sudo for loopback/mount operations (run with sudo -n when possible).

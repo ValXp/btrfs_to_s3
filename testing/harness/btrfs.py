@@ -146,11 +146,14 @@ def teardown(
 
 
 def _run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["PATH"] = _ensure_sbin_on_path(env.get("PATH", ""))
     return subprocess.run(
         list(command),
         check=True,
         text=True,
         capture_output=True,
+        env=env,
     )
 
 
@@ -170,3 +173,11 @@ def _format_error(label: str, exc: subprocess.CalledProcessError) -> str:
     if stderr:
         return f"{label}: {stderr}"
     return f"{label}: {exc}"
+
+
+def _ensure_sbin_on_path(path: str) -> str:
+    parts = [entry for entry in path.split(os.pathsep) if entry]
+    for entry in ("/usr/sbin", "/sbin"):
+        if entry not in parts:
+            parts.append(entry)
+    return os.pathsep.join(parts)

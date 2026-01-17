@@ -26,4 +26,5 @@
 - 2026-01-17 11:39 MST: Completed Task 9 systemd units and docs; commit "Add systemd units".
 - 2026-01-17 11:40 MST: Blocked on Task 10 integration harness; missing AWS test bucket/prefix credentials. Commit "Add stop marker".
 - 2026-01-17 14:29 MST: Updated test harness config to use python3 and new test bucket/prefix.
-- 2026-01-17 14:32 MST: Blocked on Task 10 integration harness; `losetup` missing for setup_btrfs. Commit "Record harness block".
+- 2026-01-17 14:32 MST: Added losetup in PATH
+- 2026-01-17 15:05 MST: Completed Task 10 integration harness run and aligned harness/CLI; commit "Complete integration harness run".

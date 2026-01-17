@@ -16,6 +16,7 @@ if TESTING_DIR not in sys.path:
 from harness.config import load_config
 from harness.logs import open_log
 from harness import runner
+from harness.env import load_env
 
 
 DEFAULT_CONFIG = os.path.abspath(
@@ -27,7 +28,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Interrupt a backup and rerun.")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--mode", choices=("full", "incremental"), default="full")
     parser.add_argument("--sleep", type=int, default=5)
     args = parser.parse_args()
 
@@ -40,14 +40,20 @@ def main() -> int:
 
     with open_log(log_path) as log:
         log.write(f"loading config from {config_path}")
-        extra_args = ["backup", "--mode", args.mode]
+        os.environ["BTRFS_TO_S3_BACKUP_TYPE"] = "full"
+        extra_args = ["backup"]
         if args.dry_run:
             log.write("dry run: printing command only")
             runner.run_tool(config_path, extra_args, dry_run=True)
             return 0
 
+        env_path = os.path.join(os.path.dirname(config_path), "test.env")
+        if os.path.exists(env_path):
+            load_env(env_path, override=False)
+
         command = runner.build_command(config, config_path, extra_args)
         env = runner.build_env()
+        env["BTRFS_TO_S3_HARNESS_RUN_DIR"] = os.path.abspath(paths["run_dir"])
         log.write(f"starting backup: {shlex.join(command)}")
 
         process = subprocess.Popen(

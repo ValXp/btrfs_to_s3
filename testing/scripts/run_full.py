@@ -36,12 +36,13 @@ def main() -> int:
 
     with open_log(log_path) as log:
         log.write(f"loading config from {config_path}")
+        os.environ["BTRFS_TO_S3_BACKUP_TYPE"] = "full"
         if args.dry_run:
             log.write("dry run: printing command only")
         try:
             result = run_tool(
                 config_path,
-                ["backup", "--mode", "full"],
+                ["backup"],
                 dry_run=args.dry_run,
             )
             if result:
