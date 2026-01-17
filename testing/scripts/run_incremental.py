@@ -25,6 +25,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run an incremental backup.")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--skip-mutate", action="store_true")
     args = parser.parse_args()
 
     config_path = os.path.abspath(args.config)
@@ -38,6 +39,8 @@ def main() -> int:
         log.write(f"loading config from {config_path}")
         if args.dry_run:
             log.write("dry run: skipping mutation and printing command only")
+        elif args.skip_mutate:
+            log.write("skipping mutation step")
         else:
             try:
                 _run_mutation(config_path, log)
