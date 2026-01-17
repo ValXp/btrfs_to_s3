@@ -6,7 +6,7 @@ PROMPT_FILE="${ROOT_DIR}/prompt.md"
 STOP_FILE="${ROOT_DIR}/stop.md"
 
 CODEX_CMD="${CODEX_CMD:-codex}"
-CODEX_ARGS="${CODEX_ARGS:---dangerously-bypass-approvals-and-sandbox}"
+CODEX_ARGS="${CODEX_ARGS:---dangerously-bypass-approvals-and-sandbox -- --non-interactive}"
 CODEX_PROMPT_FLAG="${CODEX_PROMPT_FLAG:---prompt}"
 CODEX_SLEEP_SECONDS="${CODEX_SLEEP_SECONDS:-1}"
 
