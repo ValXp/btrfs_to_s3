@@ -1,0 +1,8 @@
+/run/
+/config/test.env
+/config/test.env.local
+/.venv/
+/venv/
+/__pycache__/
+*.pyc
+.DS_Store
