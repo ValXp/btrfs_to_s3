@@ -102,6 +102,7 @@ def _render_tool_config(config: dict[str, Any]) -> str:
     btrfs_cfg = config["btrfs"]
     aws_cfg = config["aws"]
     backup_cfg = config["backup"]
+    restore_cfg = config.get("restore")
 
     run_dir = os.path.abspath(paths["run_dir"])
     lock_dir = os.path.abspath(paths["lock_dir"])
@@ -115,6 +116,11 @@ def _render_tool_config(config: dict[str, Any]) -> str:
     chunk_size_bytes = int(backup_cfg["chunk_size_mib"]) * 1024 * 1024
     spool_size_bytes = max(2 * chunk_size_bytes, 64 * 1024 * 1024)
     retention = max(1, int(backup_cfg["retention_snapshots"]))
+
+    storage_class_chunks = aws_cfg.get("storage_class_chunks", aws_cfg["storage_class"])
+    storage_class_manifest = aws_cfg.get(
+        "storage_class_manifest", aws_cfg["storage_class"]
+    )
 
     lines = [
         "[global]",
@@ -141,12 +147,38 @@ def _render_tool_config(config: dict[str, Any]) -> str:
         f'region = "{aws_cfg["region"]}"',
         f'prefix = "{aws_cfg["prefix"]}"',
         f"chunk_size_bytes = {chunk_size_bytes}",
-        f'storage_class_chunks = "{aws_cfg["storage_class"]}"',
-        f'storage_class_manifest = "{aws_cfg["storage_class"]}"',
+        f'storage_class_chunks = "{storage_class_chunks}"',
+        f'storage_class_manifest = "{storage_class_manifest}"',
         f'concurrency = {int(backup_cfg["concurrency"])}',
         f'sse = "{aws_cfg["sse"]}"',
         "",
     ]
+    if isinstance(restore_cfg, dict) and restore_cfg:
+        restore_base = restore_cfg.get(
+            "target_base_dir", os.path.join(mount_dir, "restore")
+        )
+        lines.extend(
+            [
+                "[restore]",
+                f'target_base_dir = "{restore_base}"',
+            ]
+        )
+        if "verify_mode" in restore_cfg:
+            lines.append(f'verify_mode = "{restore_cfg["verify_mode"]}"')
+        if "sample_max_files" in restore_cfg:
+            lines.append(
+                f"sample_max_files = {int(restore_cfg['sample_max_files'])}"
+            )
+        if "wait_for_restore" in restore_cfg:
+            value = bool(restore_cfg["wait_for_restore"])
+            lines.append(f"wait_for_restore = {str(value).lower()}")
+        if "restore_timeout_seconds" in restore_cfg:
+            lines.append(
+                f"restore_timeout_seconds = {int(restore_cfg['restore_timeout_seconds'])}"
+            )
+        if "restore_tier" in restore_cfg:
+            lines.append(f'restore_tier = "{restore_cfg["restore_tier"]}"')
+        lines.append("")
     return "\n".join(lines)
 
 

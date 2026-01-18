@@ -15,11 +15,15 @@ AWS test bucket/prefix guidance
 - Example prefix: `btrfs-to-s3-test/`
 - Consider a lifecycle rule to expire test objects and control costs.
 - For tests, use a non-Glacier storage class unless you accept restore delays.
+- Archive restore checks require `s3:RestoreObject` and can take hours depending
+  on the storage class/tier; expect additional retrieval costs.
 
 Configuration
 - `testing/config/test.toml` controls harness settings and S3 parameters.
 - `testing/config/test_large.toml` forces multi-chunk uploads with a smaller
   chunk size and larger dataset defaults.
+- `testing/config/test_archive.toml` uses an archival storage class and overrides
+  restore wait/timeout settings.
 - `testing/config/test.env` holds AWS credentials and optional overrides.
 - Set all `CHANGE_ME` values before running tests.
 
@@ -39,6 +43,8 @@ Quickstart
    - Optional: add `--include-large` to run the multi-chunk scenario.
 4. Run the multi-chunk scenario:
    - `python testing/scripts/run_large.py --config testing/config/test_large.toml`
+5. Run the archive restore checks (optional):
+   - `python testing/scripts/run_restore_archive.py --config testing/config/test_archive.toml`
 
 Privilege model
 - Run `testing/scripts/setup_btrfs.py` with sudo. It will chown `testing/run/` to

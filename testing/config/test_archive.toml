@@ -1,0 +1,37 @@
+[tool]
+cmd = ["python3", "-m", "btrfs_to_s3"]
+config_flag = "--config"
+
+[paths]
+run_dir = "testing/run"
+logs_dir = "testing/run/logs"
+scratch_dir = "testing/run/scratch"
+lock_dir = "testing/run/lock"
+btrfs_image = "testing/run/btrfs.img"
+mount_dir = "testing/run/mnt"
+data_dir = "testing/run/mnt/data"
+snapshots_dir = "testing/run/mnt/snapshots"
+
+[btrfs]
+loopback_size_gib = 4
+mount_options = "compress=zstd"
+subvolumes = ["data", "root", "home"]
+
+[aws]
+region = "us-east-1"
+bucket = "codex-btrfs-test-bucket"
+prefix = "btrfs-to-s3-test/"
+storage_class = "GLACIER"
+storage_class_chunks = "GLACIER"
+storage_class_manifest = "STANDARD"
+sse = "AES256"
+
+[backup]
+chunk_size_mib = 64
+concurrency = 4
+retention_snapshots = 2
+
+[restore]
+wait_for_restore = true
+restore_timeout_seconds = 3600
+restore_tier = "Standard"
