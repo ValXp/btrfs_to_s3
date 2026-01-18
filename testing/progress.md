@@ -22,3 +22,4 @@ Progress
 - 2026-01-17 18:38 - done - Add archive restore scenario
 - 2026-01-17 18:39 - done - Add CLI flag coverage script
 - 2026-01-17 18:40 - done - Add lock contention coverage
+- 2026-01-17 18:42 - done - Add spool configuration coverage
