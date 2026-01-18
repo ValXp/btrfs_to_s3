@@ -197,6 +197,11 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
             storage_class=config.s3.storage_class_chunks,
             sse=config.s3.sse,
             part_size=min(config.s3.chunk_size_bytes, MAX_PART_SIZE),
+            concurrency=config.s3.concurrency,
+            spool_dir=config.global_cfg.spool_dir
+            if config.s3.spool_enabled
+            else None,
+            spool_size_bytes=config.global_cfg.spool_size_bytes,
         )
 
         for subvolume_path, plan_item, action in work_items:

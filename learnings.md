@@ -26,3 +26,4 @@ Learnings
 - FYI: backup now acquires LockFile around the full CLI flow and releases it on early exits.
 - FYI: backup now downgrades incremental plans to full when the parent snapshot path is missing on disk.
 - FYI: restore verification now skips content checks when the source snapshot path is missing, but still validates target metadata.
+- FYI: S3 uploader now supports concurrent multipart uploads with optional spooling to disk when s3.spool_enabled is true.

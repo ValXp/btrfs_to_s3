@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from unittest import mock
+from pathlib import Path
 
 from btrfs_to_s3.uploader import RetryPolicy, S3Uploader, UploadError
 
@@ -83,6 +85,7 @@ class UploaderTests(unittest.TestCase):
 
     def test_put_object_uses_sse(self) -> None:
         client = FakeClient()
+        created: dict[str, int] = {}
         uploader = S3Uploader(
             client=client,
             bucket="bucket",
@@ -115,6 +118,74 @@ class UploaderTests(unittest.TestCase):
         upload_calls = [call for call in client.calls if call[0] == "upload_part"]
         sizes = [len(call[1]["Body"]) for call in upload_calls]
         self.assertEqual(sizes, [5, 5])
+
+    def test_concurrency_setting_is_used(self) -> None:
+        client = FakeClient()
+        created: dict[str, int] = {}
+
+        class FakeFuture:
+            def __init__(self, value: str) -> None:
+                self._value = value
+
+            def result(self) -> str:
+                return self._value
+
+        class FakeExecutor:
+            created: dict[str, int] = {}
+
+            def __init__(self, max_workers: int) -> None:
+                self.created["max_workers"] = max_workers
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def submit(self, fn, *args, **kwargs):
+                return FakeFuture(fn(*args, **kwargs))
+
+        FakeExecutor.created = created
+
+        def fake_wait(futures, return_when=None):
+            return set(futures), set()
+
+        with mock.patch(
+            "btrfs_to_s3.uploader.ThreadPoolExecutor", FakeExecutor
+        ), mock.patch(
+            "btrfs_to_s3.uploader.wait", side_effect=fake_wait
+        ):
+            uploader = S3Uploader(
+                client=client,
+                bucket="bucket",
+                storage_class="STANDARD",
+                sse="AES256",
+                part_size=4,
+                multipart_threshold=5,
+                concurrency=3,
+                retry_policy=RetryPolicy(sleep=lambda _: None, jitter=lambda d: d),
+            )
+            uploader.upload_bytes("key", b"abcdefghij")
+            self.assertEqual(FakeExecutor.created.get("max_workers"), 3)
+
+    def test_spool_cleans_up_files(self) -> None:
+        client = FakeClient()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            spool_dir = Path(temp_dir)
+            uploader = S3Uploader(
+                client=client,
+                bucket="bucket",
+                storage_class="STANDARD",
+                sse="AES256",
+                part_size=5 * 1024 * 1024,
+                multipart_threshold=5,
+                concurrency=2,
+                spool_dir=spool_dir,
+                spool_size_bytes=8 * 1024 * 1024,
+                retry_policy=RetryPolicy(sleep=lambda _: None, jitter=lambda d: d),
+            )
+            uploader.upload_bytes("key", b"abcdefghij")
+            self.assertEqual(list(spool_dir.iterdir()), [])
 
 
 if __name__ == "__main__":

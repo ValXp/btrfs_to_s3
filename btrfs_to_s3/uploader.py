@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import io
 import random
+import tempfile
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from pathlib import Path
 from typing import BinaryIO, Callable, Iterator
 
 MiB = 1024 * 1024
@@ -34,6 +37,12 @@ class UploadResult:
     etag: str | None
 
 
+@dataclass(frozen=True)
+class SpoolPart:
+    path: Path
+    size: int
+
+
 class S3Uploader:
     def __init__(
         self,
@@ -43,6 +52,9 @@ class S3Uploader:
         sse: str,
         part_size: int = 128 * 1024 * 1024,
         multipart_threshold: int = 5 * 1024 * 1024,
+        concurrency: int = 1,
+        spool_dir: Path | None = None,
+        spool_size_bytes: int = 0,
         retry_policy: RetryPolicy | None = None,
     ) -> None:
         self.client = client
@@ -51,6 +63,9 @@ class S3Uploader:
         self.sse = sse
         self.part_size = part_size
         self.multipart_threshold = multipart_threshold
+        self.concurrency = max(1, concurrency)
+        self.spool_dir = spool_dir
+        self.spool_size_bytes = spool_size_bytes
         self.retry_policy = retry_policy or RetryPolicy()
 
     def upload_bytes(self, key: str, data: bytes) -> UploadResult:
@@ -86,6 +101,11 @@ class S3Uploader:
         if part_size is None:
             part_size = self._effective_part_size()
         part_size = self._effective_part_size(part_size)
+        use_spool = self._use_spool()
+        if use_spool:
+            part_size = min(part_size, self.spool_size_bytes)
+            if part_size < MIN_PART_SIZE:
+                raise UploadError("spool_size_bytes must be >= 5 MiB")
         response = self.client.create_multipart_upload(
             Bucket=self.bucket,
             Key=key,
@@ -93,21 +113,41 @@ class S3Uploader:
             ServerSideEncryption=self.sse,
         )
         upload_id = response["UploadId"]
-        parts = []
+        parts: dict[int, str] = {}
         total_size = 0
+        max_in_flight = self._max_in_flight_parts(part_size, use_spool)
+        in_flight: dict[object, tuple[int, bytes | SpoolPart]] = {}
         try:
-            for part_number, part_data in enumerate(
-                self._iter_parts(stream, initial, part_size), start=1
-            ):
-                etag = self._upload_part_with_retry(
-                    key=key,
-                    upload_id=upload_id,
-                    part_number=part_number,
-                    data=part_data,
-                )
-                parts.append({"ETag": etag, "PartNumber": part_number})
-                total_size += len(part_data)
+            with ThreadPoolExecutor(max_workers=max_in_flight) as executor:
+                part_iter: Iterator[bytes | SpoolPart]
+                if use_spool:
+                    part_iter = self._iter_spooled_parts(
+                        stream, initial, part_size, self.spool_dir
+                    )
+                else:
+                    part_iter = self._iter_parts(stream, initial, part_size)
+                for part_number, part_data in enumerate(part_iter, start=1):
+                    part_len = (
+                        part_data.size
+                        if isinstance(part_data, SpoolPart)
+                        else len(part_data)
+                    )
+                    total_size += part_len
+                    future = executor.submit(
+                        self._upload_part_with_retry,
+                        key,
+                        upload_id,
+                        part_number,
+                        part_data,
+                    )
+                    in_flight[future] = (part_number, part_data)
+                    if len(in_flight) >= max_in_flight:
+                        self._drain_in_flight(in_flight, parts, use_spool)
+                while in_flight:
+                    self._drain_in_flight(in_flight, parts, use_spool)
         except Exception as exc:
+            if use_spool:
+                self._cleanup_in_flight(in_flight)
             self.client.abort_multipart_upload(
                 Bucket=self.bucket,
                 Key=key,
@@ -118,24 +158,38 @@ class S3Uploader:
             Bucket=self.bucket,
             Key=key,
             UploadId=upload_id,
-            MultipartUpload={"Parts": parts},
+            MultipartUpload={"Parts": self._ordered_parts(parts)},
         )
         return UploadResult(key=key, size=total_size, etag=None)
 
     def _upload_part_with_retry(
-        self, key: str, upload_id: str, part_number: int, data: bytes
+        self,
+        key: str,
+        upload_id: str,
+        part_number: int,
+        data: bytes | SpoolPart,
     ) -> str:
         attempt = 0
         while True:
             attempt += 1
             try:
-                response = self.client.upload_part(
-                    Bucket=self.bucket,
-                    Key=key,
-                    UploadId=upload_id,
-                    PartNumber=part_number,
-                    Body=data,
-                )
+                if isinstance(data, SpoolPart):
+                    with data.path.open("rb") as handle:
+                        response = self.client.upload_part(
+                            Bucket=self.bucket,
+                            Key=key,
+                            UploadId=upload_id,
+                            PartNumber=part_number,
+                            Body=handle,
+                        )
+                else:
+                    response = self.client.upload_part(
+                        Bucket=self.bucket,
+                        Key=key,
+                        UploadId=upload_id,
+                        PartNumber=part_number,
+                        Body=data,
+                    )
                 return response["ETag"]
             except Exception as exc:
                 if attempt >= self.retry_policy.max_attempts:
@@ -196,3 +250,85 @@ class S3Uploader:
                 part = bytes(buffer[:part_size])
                 del buffer[:part_size]
             yield part
+
+    def _iter_spooled_parts(
+        self,
+        stream: BinaryIO,
+        initial: bytes,
+        part_size: int,
+        spool_dir: Path | None,
+    ) -> Iterator[SpoolPart]:
+        if spool_dir is None:
+            raise UploadError("spool_dir required when spooling")
+        spool_dir.mkdir(parents=True, exist_ok=True)
+        buffer = bytearray(initial)
+        while True:
+            if not buffer:
+                data = stream.read(64 * 1024)
+                if not data:
+                    break
+                buffer.extend(data)
+            with tempfile.NamedTemporaryFile(
+                dir=spool_dir, delete=False
+            ) as handle:
+                size = 0
+                if buffer:
+                    take = min(len(buffer), part_size)
+                    handle.write(buffer[:take])
+                    size += take
+                    del buffer[:take]
+                while size < part_size:
+                    data = stream.read(min(8 * MiB, part_size - size))
+                    if not data:
+                        break
+                    handle.write(data)
+                    size += len(data)
+                path = Path(handle.name)
+            if size == 0:
+                path.unlink(missing_ok=True)
+                break
+            yield SpoolPart(path=path, size=size)
+
+    def _use_spool(self) -> bool:
+        return self.spool_dir is not None and self.spool_size_bytes > 0
+
+    def _max_in_flight_parts(self, part_size: int, use_spool: bool) -> int:
+        if not use_spool:
+            return self.concurrency
+        limit = max(1, self.spool_size_bytes // max(part_size, 1))
+        return max(1, min(self.concurrency, limit))
+
+    def _ordered_parts(self, parts: dict[int, str]) -> list[dict[str, object]]:
+        return [
+            {"ETag": etag, "PartNumber": part_number}
+            for part_number, etag in sorted(parts.items())
+        ]
+
+    def _drain_in_flight(
+        self,
+        in_flight: dict[object, tuple[int, bytes | SpoolPart]],
+        parts: dict[int, str],
+        use_spool: bool,
+    ) -> None:
+        done, _ = wait(in_flight.keys(), return_when=FIRST_COMPLETED)
+        for future in done:
+            part_number, part_data = in_flight.pop(future)
+            try:
+                etag = future.result()
+            except Exception:
+                if use_spool:
+                    self._cleanup_spool_part(part_data)
+                raise
+            parts[part_number] = etag
+            if use_spool:
+                self._cleanup_spool_part(part_data)
+
+    def _cleanup_spool_part(self, part_data: bytes | SpoolPart) -> None:
+        if isinstance(part_data, SpoolPart):
+            part_data.path.unlink(missing_ok=True)
+
+    def _cleanup_in_flight(
+        self, in_flight: dict[object, tuple[int, bytes | SpoolPart]]
+    ) -> None:
+        for _part_number, part_data in in_flight.values():
+            self._cleanup_spool_part(part_data)

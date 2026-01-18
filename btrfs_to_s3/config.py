@@ -27,6 +27,7 @@ DEFAULT_CHUNK_SIZE_BYTES = 200 * GiB
 DEFAULT_STORAGE_CLASS_CHUNKS = "DEEP_ARCHIVE"
 DEFAULT_STORAGE_CLASS_MANIFEST = "STANDARD"
 DEFAULT_S3_CONCURRENCY = 4
+DEFAULT_S3_SPOOL_ENABLED = False
 DEFAULT_S3_SSE = "AES256"
 DEFAULT_RESTORE_TARGET_BASE_DIR = "/srv/restore"
 DEFAULT_RESTORE_VERIFY_MODE = "full"
@@ -76,6 +77,7 @@ class S3Config:
     storage_class_chunks: str
     storage_class_manifest: str
     concurrency: int
+    spool_enabled: bool
     sse: str
 
 
@@ -152,6 +154,9 @@ class Config:
                 s3_data.get("storage_class_manifest", DEFAULT_STORAGE_CLASS_MANIFEST)
             ),
             concurrency=int(s3_data.get("concurrency", DEFAULT_S3_CONCURRENCY)),
+            spool_enabled=bool(
+                s3_data.get("spool_enabled", DEFAULT_S3_SPOOL_ENABLED)
+            ),
             sse=str(s3_data.get("sse", DEFAULT_S3_SSE)),
         )
         restore = RestoreConfig(
@@ -238,6 +243,8 @@ def validate_config(config: Config) -> None:
     _validate_positive(config.s3.chunk_size_bytes, "s3.chunk_size_bytes")
     if config.s3.concurrency < 1:
         raise ConfigError("s3.concurrency must be >= 1")
+    if not isinstance(config.s3.spool_enabled, bool):
+        raise ConfigError("s3.spool_enabled must be true or false")
     if not config.s3.storage_class_chunks:
         raise ConfigError("s3.storage_class_chunks is required")
     if not config.s3.storage_class_manifest:

@@ -37,6 +37,7 @@ chunk_size_bytes = 2048
 storage_class_chunks = "STANDARD"
 storage_class_manifest = "STANDARD"
 concurrency = 2
+spool_enabled = false
 sse = "AES256"
 """
 

@@ -43,6 +43,7 @@ def make_config() -> Config:
             storage_class_chunks="STANDARD",
             storage_class_manifest="STANDARD",
             concurrency=1,
+            spool_enabled=False,
             sse="AES256",
         ),
         restore=RestoreConfig(
