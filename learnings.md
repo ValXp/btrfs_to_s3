@@ -21,3 +21,4 @@ Learnings
 - FYI: testing/scripts/mutate_data.py needed a local _write_binary helper (mirrors seed_data).
 
 - FYI: chunk_stream now requires consumers to fully read each chunk before requesting the next (RuntimeError otherwise) to keep stream boundaries intact.
+- FYI: restore chunk download now streams with configurable read_size for tests.

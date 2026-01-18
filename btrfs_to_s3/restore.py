@@ -184,14 +184,24 @@ def download_and_verify_chunks(
     bucket: str,
     chunks: Iterable[ChunkInfo],
     output: IO[bytes],
+    *,
+    read_size: int = 1024 * 1024,
 ) -> None:
+    if read_size <= 0:
+        raise RestoreError("read_size must be positive")
     for chunk in chunks:
         response = client.get_object(Bucket=bucket, Key=chunk.key)
-        body = response["Body"].read()
-        digest = hashlib.sha256(body).hexdigest()
+        body = response["Body"]
+        hasher = hashlib.sha256()
+        while True:
+            data = body.read(read_size)
+            if not data:
+                break
+            hasher.update(data)
+            output.write(data)
+        digest = hasher.hexdigest()
         if digest != chunk.sha256:
             raise RestoreError(f"hash mismatch for {chunk.key}")
-        output.write(body)
 
 
 def restore_chain(

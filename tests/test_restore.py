@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import subprocess
@@ -15,9 +16,17 @@ from btrfs_to_s3 import restore
 class FakeBody:
     def __init__(self, payload: bytes) -> None:
         self._payload = payload
+        self._offset = 0
 
-    def read(self) -> bytes:
-        return self._payload
+    def read(self, size: int | None = None) -> bytes:
+        if size is None:
+            size = len(self._payload) - self._offset
+        if size < 0:
+            return b""
+        start = self._offset
+        end = min(len(self._payload), start + size)
+        self._offset = end
+        return self._payload[start:end]
 
 
 class FakeS3:
@@ -29,7 +38,10 @@ class FakeS3:
     def get_object(self, Bucket: str, Key: str) -> dict[str, object]:
         if Key not in self.objects:
             raise KeyError(Key)
-        return {"Body": FakeBody(self.objects[Key])}
+        payload = self.objects[Key]
+        if isinstance(payload, FakeBody):
+            return {"Body": payload}
+        return {"Body": FakeBody(payload)}
 
     def head_object(self, Bucket: str, Key: str) -> dict[str, object]:
         if Key not in self.objects:
@@ -152,6 +164,39 @@ class RestoreTests(unittest.TestCase):
                 client, "bucket", [chunk], output
             )
         self.assertIn("hash mismatch", str(context.exception))
+
+    def test_download_streams_and_verifies(self) -> None:
+        class RecordingBody(FakeBody):
+            def __init__(self, payload: bytes) -> None:
+                super().__init__(payload)
+                self.read_sizes: list[int | None] = []
+
+            def read(self, size: int | None = None) -> bytes:
+                self.read_sizes.append(size)
+                return super().read(size)
+
+        payload = b"streamed-payload"
+        body = RecordingBody(payload)
+        client = FakeS3()
+        client.objects["chunk.bin"] = body
+        chunk = restore.ChunkInfo(
+            key="chunk.bin",
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size=len(payload),
+        )
+        output = io.BytesIO()
+
+        restore.download_and_verify_chunks(
+            client,
+            "bucket",
+            [chunk],
+            output,
+            read_size=4,
+        )
+
+        self.assertEqual(output.getvalue(), payload)
+        self.assertTrue(all(size == 4 for size in body.read_sizes))
+        self.assertGreater(len(body.read_sizes), 2)
 
 
 class RestoreVerifyTests(unittest.TestCase):
