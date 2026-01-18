@@ -9,6 +9,9 @@ Prerequisites
 - btrfs-progs (mkfs.btrfs, btrfs)
 - util-linux (losetup, mount, umount)
 - AWS credentials with access to the test bucket/prefix
+  - Note: `losetup` and `mkfs.btrfs` often live in `/usr/sbin`. If your PATH
+    doesn't include `/usr/sbin`, run via `sudo -E` so the harness helpers
+    can find them.
 
 AWS test bucket/prefix guidance
 - Use a dedicated bucket or a dedicated prefix within a shared bucket.
@@ -37,14 +40,38 @@ Quickstart
    - `python3.14 -m venv testing/.venv`
    - `testing/.venv/bin/pip install -r testing/requirements.txt`
 2. Edit `testing/config/test.toml` and `testing/config/test.env`.
-3. Run the full harness:
-   - `python testing/scripts/run_all.py --config testing/config/test.toml`
+3. Load AWS credentials (so sudo preserves them):
+   - `set -a; . testing/config/test.env; set +a`
+4. Run the full harness (from repo root so paths match config):
+   - `sudo -E python3 testing/scripts/run_all.py --config testing/config/test.toml`
    - Optional: add `--skip-s3` to run local setup/seed/mutate without S3.
    - Optional: add `--include-large` to run the multi-chunk scenario.
-4. Run the multi-chunk scenario:
-   - `python testing/scripts/run_large.py --config testing/config/test_large.toml`
-5. Run the archive restore checks (optional):
-   - `python testing/scripts/run_restore_archive.py --config testing/config/test_archive.toml`
+5. Run the multi-chunk scenario:
+   - `sudo -E python3 testing/scripts/run_large.py --config testing/config/test_large.toml`
+6. Run the archive restore checks (optional):
+   - `sudo -E python3 testing/scripts/run_restore_archive.py --config testing/config/test_archive.toml`
+
+Clearing logs between runs
+- Log paths are driven by `paths.logs_dir` in the config. To avoid stale logs:
+  - `find testing/run/logs -type f -delete`
+  - `find testing/run/large/logs -type f -delete`
+  - `find testing/run/small/logs -type f -delete`
+
+Small vs large dataset scenarios
+- Small dataset / large chunk (single chunk expected):
+  - Config: `testing/config/test_small.toml` (1 MiB dataset, 10 MiB chunks).
+  - Run: `sudo -E python3 testing/scripts/run_full.py --config testing/config/test_small.toml`
+  - Verify: `sudo -E python3 testing/scripts/verify_manifest.py --config testing/config/test_small.toml`
+- Large dataset / smaller chunk (multi-chunk expected):
+  - Config: `testing/config/test_large.toml` (size and chunk tunable).
+  - Run: `sudo -E python3 testing/scripts/run_large.py --config testing/config/test_large.toml`
+
+Sudo + environment notes
+- `setup_btrfs.py` and `teardown_btrfs.py` require sudo.
+- Use `sudo -E` after `set -a; . testing/config/test.env; set +a` so the
+  boto3 client sees `AWS_*` credentials.
+- If you don't want to use sudo for non-privileged steps, you can run only
+  setup/teardown with sudo and the rest unprivileged, but keep the same env.
 
 Privilege model
 - Run `testing/scripts/setup_btrfs.py` with sudo. It will chown `testing/run/` to

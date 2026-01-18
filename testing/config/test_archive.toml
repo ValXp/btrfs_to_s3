@@ -21,8 +21,8 @@ subvolumes = ["data", "root", "home"]
 region = "us-east-1"
 bucket = "codex-btrfs-test-bucket"
 prefix = "btrfs-to-s3-test/"
-storage_class = "GLACIER"
-storage_class_chunks = "GLACIER"
+storage_class = "STANDARD"
+storage_class_chunks = "STANDARD"
 storage_class_manifest = "STANDARD"
 sse = "AES256"
 

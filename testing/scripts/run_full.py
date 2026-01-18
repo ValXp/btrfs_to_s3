@@ -40,13 +40,19 @@ def main() -> int:
         if args.dry_run:
             log.write("dry run: printing command only")
         try:
-            result = run_tool(
-                config_path,
-                ["backup"],
-                dry_run=args.dry_run,
-            )
-            if result:
-                _log_process(log, "backup", result)
+            subvolumes = config["btrfs"]["subvolumes"]
+            if not subvolumes:
+                log.write("no subvolumes configured", level="ERROR")
+                return 1
+            for name in subvolumes:
+                log.write(f"running full backup for subvolume {name}")
+                result = run_tool(
+                    config_path,
+                    ["backup", "--subvolume", name],
+                    dry_run=args.dry_run,
+                )
+                if result:
+                    _log_process(log, f"backup[{name}]", result)
         except subprocess.CalledProcessError as exc:
             _log_process_error(log, "backup", exc)
             return 1

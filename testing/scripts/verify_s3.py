@@ -107,10 +107,6 @@ def main() -> int:
         return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 def _missing_subvolumes(
     objects: list[dict[str, object]],
     prefix: str,
@@ -224,3 +220,7 @@ def _verify_manifest_chunks(
                     f"{chunk_key}: size {actual_size} != manifest {size}"
                 )
     return errors
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

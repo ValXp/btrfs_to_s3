@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 
 TESTING_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -44,14 +45,39 @@ def main() -> int:
         retention = backup_cfg["retention_snapshots"]
         log.write(f"found {len(snapshots)} snapshots, retention {retention}")
 
-        if len(snapshots) > retention:
-            log.write("snapshot retention exceeded", level="ERROR")
-            for snapshot in snapshots:
-                log.write(f"snapshot: {snapshot}", level="ERROR")
+        per_subvolume: dict[str, list[str]] = {}
+        for snapshot in snapshots:
+            name = os.path.basename(snapshot)
+            subvolume = _parse_snapshot_subvolume(name)
+            if not subvolume:
+                log.write(f"skipping non-matching snapshot {snapshot}", level="WARN")
+                continue
+            per_subvolume.setdefault(subvolume, []).append(snapshot)
+
+        over_limit = False
+        for subvolume, items in sorted(per_subvolume.items()):
+            count = len(items)
+            log.write(f"subvolume {subvolume} snapshots={count}")
+            if count > retention:
+                over_limit = True
+                log.write(
+                    f"snapshot retention exceeded for {subvolume}", level="ERROR"
+                )
+                for snapshot in sorted(items):
+                    log.write(f"snapshot: {snapshot}", level="ERROR")
+
+        if over_limit:
             return 1
 
         log.write("snapshot retention within limits")
-        return 0
+    return 0
+
+
+def _parse_snapshot_subvolume(name: str) -> str | None:
+    match = re.match(r"^(?P<subvol>.+)__\d{8}T\d{6}Z__(full|inc)$", name)
+    if not match:
+        return None
+    return match.group("subvol")
 
 
 if __name__ == "__main__":

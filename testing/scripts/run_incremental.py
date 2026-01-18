@@ -37,7 +37,6 @@ def main() -> int:
 
     with open_log(log_path) as log:
         log.write(f"loading config from {config_path}")
-        os.environ["BTRFS_TO_S3_BACKUP_TYPE"] = "incremental"
         if args.dry_run:
             log.write("dry run: skipping mutation and printing command only")
         elif args.skip_mutate:
@@ -53,13 +52,20 @@ def main() -> int:
                 return 1
 
         try:
-            result = run_tool(
-                config_path,
-                ["backup"],
-                dry_run=args.dry_run,
-            )
-            if result:
-                _log_process(log, "backup", result)
+            log.write("forcing incremental run with --once")
+            subvolumes = config["btrfs"]["subvolumes"]
+            if not subvolumes:
+                log.write("no subvolumes configured", level="ERROR")
+                return 1
+            for name in subvolumes:
+                log.write(f"running incremental backup for subvolume {name}")
+                result = run_tool(
+                    config_path,
+                    ["backup", "--once", "--subvolume", name],
+                    dry_run=args.dry_run,
+                )
+                if result:
+                    _log_process(log, f"backup[{name}]", result)
         except subprocess.CalledProcessError as exc:
             _log_process_error(log, "backup", exc)
             return 1
