@@ -254,6 +254,36 @@ class CliTests(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertTrue(lock_state["released"])
 
+    def test_backup_stale_lock_is_recovered(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self._make_config(temp_dir)
+            lock_path = config.global_cfg.lock_path
+            lock_path.write_text("999999")
+            args = cli.parse_args(
+                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            )
+            args.dry_run = False
+            args.no_s3 = False
+            args.once = False
+            args.subvolume = None
+            plan = [
+                PlanItem(
+                    subvolume="data",
+                    action="skip",
+                    parent_snapshot="snap",
+                    reason="incremental_not_due",
+                )
+            ]
+            with mock.patch(
+                "btrfs_to_s3.cli.plan_backups", return_value=plan
+            ), mock.patch(
+                "btrfs_to_s3.cli._has_aws_credentials",
+                side_effect=AssertionError("credentials should not be checked"),
+            ):
+                result = cli.run_backup(args, config)
+            self.assertEqual(result, 0)
+            self.assertFalse(lock_path.exists())
+
     def test_backup_missing_parent_falls_back_to_full(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)
@@ -270,6 +300,85 @@ class CliTests(unittest.TestCase):
                     subvolume="data",
                     action="inc",
                     parent_snapshot=missing_parent,
+                    reason="incremental_due",
+                )
+            ]
+            created: dict[str, str] = {}
+            parent_holder: dict[str, object | None] = {}
+
+            class FakeProcess:
+                returncode = 0
+
+                def communicate(self):
+                    return b"", b""
+
+            class FakeStream:
+                def __init__(self) -> None:
+                    self.stdout = io.BytesIO(b"")
+                    self.process = FakeProcess()
+
+            def fake_open_btrfs_send(path: Path, parent: Path | None):
+                parent_holder["parent"] = parent
+                return FakeStream()
+
+            def fake_create_snapshot(self, subvolume_path, subvolume_name, kind):
+                created["kind"] = kind
+                return Snapshot(
+                    name="data__20260101T000000Z__full",
+                    path=Path(temp_dir) / "snap",
+                    kind=kind,
+                    created_at=datetime.now(timezone.utc),
+                )
+
+            with mock.patch(
+                "btrfs_to_s3.cli.plan_backups", return_value=plan
+            ), mock.patch(
+                "btrfs_to_s3.cli._has_aws_credentials", return_value=True
+            ), mock.patch(
+                "btrfs_to_s3.cli.boto3.client", return_value=object()
+            ), mock.patch(
+                "btrfs_to_s3.cli.chunk_stream", return_value=iter([])
+            ), mock.patch(
+                "btrfs_to_s3.cli.publish_manifest"
+            ), mock.patch(
+                "btrfs_to_s3.cli.open_btrfs_send",
+                side_effect=fake_open_btrfs_send,
+            ), mock.patch.object(
+                cli.SnapshotManager, "create_snapshot", fake_create_snapshot
+            ), mock.patch.object(
+                cli.SnapshotManager, "prune_snapshots", return_value=[]
+            ):
+                result = cli.run_backup(args, config)
+            self.assertEqual(result, 0)
+            self.assertEqual(created.get("kind"), "full")
+            self.assertIsNone(parent_holder.get("parent"))
+
+    def test_backup_missing_parent_manifest_falls_back_to_full(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self._make_config(temp_dir)
+            args = cli.parse_args(
+                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            )
+            args.dry_run = False
+            args.no_s3 = False
+            args.once = False
+            args.subvolume = None
+
+            state_path = config.global_cfg.state_path
+            state_path.write_text(
+                '{"subvolumes":{"data":{"last_snapshot":"%s","last_full_at":"2025-12-15T00:00:00Z"}},"last_run_at":null}\n'
+                % (Path(temp_dir) / "snapshots" / "data__20260101T000000Z__inc")
+            )
+
+            parent_snapshot = Path(temp_dir) / "snapshots" / "data__20260101T000000Z__inc"
+            parent_snapshot.parent.mkdir(parents=True, exist_ok=True)
+            parent_snapshot.write_text("stub")
+
+            plan = [
+                PlanItem(
+                    subvolume="data",
+                    action="inc",
+                    parent_snapshot=str(parent_snapshot),
                     reason="incremental_due",
                 )
             ]
