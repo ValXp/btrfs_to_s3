@@ -13,9 +13,12 @@ TESTING_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)
 if TESTING_DIR not in sys.path:
     sys.path.insert(0, TESTING_DIR)
 
+from harness.aws import create_s3_client, list_objects, read_object
 from harness.config import load_config
+from harness.env import load_env
 from harness.logs import open_log
 from harness.runner import run_tool
+from harness import manifest as manifest_lib
 
 
 DEFAULT_CONFIG = os.path.abspath(
@@ -32,6 +35,11 @@ def main() -> int:
     parser.add_argument("--target-name", default=None)
     parser.add_argument("--target", default=None)
     parser.add_argument("--manifest-key", default=DEFAULT_MANIFEST_KEY)
+    parser.add_argument(
+        "--use-incremental-manifest",
+        action="store_true",
+        help="Select the latest incremental manifest key from S3.",
+    )
     parser.add_argument("--restore-timeout", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -39,6 +47,10 @@ def main() -> int:
     config_path = os.path.abspath(args.config)
     config = load_config(config_path)
     paths = config["paths"]
+
+    env_path = os.path.join(os.path.dirname(config_path), "test.env")
+    if os.path.exists(env_path):
+        load_env(env_path, override=False)
 
     log_path = os.path.join(paths["logs_dir"], "run_restore.log")
     os.makedirs(paths["logs_dir"], exist_ok=True)
@@ -48,19 +60,20 @@ def main() -> int:
         try:
             subvolume = _resolve_subvolume(args.subvolume, config)
             target_path = _resolve_target_path(args, paths, subvolume)
+            manifest_key = _resolve_manifest_key(args, config, subvolume, log)
         except ValueError as exc:
             log.write(str(exc), level="ERROR")
             return 1
 
         log.write(f"restoring subvolume {subvolume} to {target_path}")
-        if args.manifest_key:
-            log.write(f"using manifest key {args.manifest_key}")
+        if manifest_key:
+            log.write(f"using manifest key {manifest_key}")
         if args.dry_run:
             log.write("dry run: printing command only")
 
         extra_args = ["restore", "--subvolume", subvolume, "--target", target_path]
-        if args.manifest_key:
-            extra_args.extend(["--manifest-key", args.manifest_key])
+        if manifest_key:
+            extra_args.extend(["--manifest-key", manifest_key])
         if args.restore_timeout is not None:
             extra_args.extend(["--restore-timeout", str(args.restore_timeout)])
 
@@ -95,6 +108,49 @@ def _resolve_subvolume(requested: str | None, config: dict) -> str:
             f"subvolume {requested} not in config list: {', '.join(subvolumes)}"
         )
     return requested
+
+
+def _resolve_manifest_key(
+    args,
+    config: dict,
+    subvolume: str,
+    log,
+) -> str | None:
+    if args.manifest_key and args.use_incremental_manifest:
+        raise ValueError("use either --manifest-key or --use-incremental-manifest")
+    if args.manifest_key:
+        return args.manifest_key
+    if not args.use_incremental_manifest:
+        return None
+
+    aws_cfg = config["aws"]
+    client = create_s3_client(aws_cfg["region"])
+    prefix = aws_cfg.get("prefix", "")
+    if prefix and not prefix.endswith("/"):
+        prefix = f"{prefix}/"
+    manifest_prefix = f"{prefix}subvol/{subvolume}/incremental/"
+    objects = list_objects(client, aws_cfg["bucket"], manifest_prefix)
+    manifest_keys = sorted(
+        obj["Key"]
+        for obj in objects
+        if isinstance(obj.get("Key"), str)
+        and obj["Key"].startswith(manifest_prefix)
+        and obj["Key"].endswith(".json")
+        and os.path.basename(obj["Key"]).startswith("manifest-")
+    )
+    if not manifest_keys:
+        raise ValueError(f"no incremental manifests under {manifest_prefix}")
+    manifest_key = manifest_keys[-1]
+    log.write(f"selected incremental manifest {manifest_key}")
+    manifest_payload = read_object(client, aws_cfg["bucket"], manifest_key)
+    manifest = manifest_lib.load_json_bytes(manifest_payload, manifest_key)
+    kind = manifest.get("kind")
+    if kind != "incremental":
+        raise ValueError(f"{manifest_key} has kind {kind!r}, expected incremental")
+    parent_manifest = manifest.get("parent_manifest")
+    if not isinstance(parent_manifest, str) or not parent_manifest:
+        raise ValueError(f"{manifest_key} missing parent_manifest for chain restore")
+    return manifest_key
 
 
 def _resolve_target_path(args, paths: dict[str, str], subvolume: str) -> str:

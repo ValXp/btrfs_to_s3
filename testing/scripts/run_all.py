@@ -57,6 +57,7 @@ def main() -> int:
                 ("verify_s3", "verify_s3.py", []),
                 ("verify_retention", "verify_retention.py", []),
                 ("restore", "run_restore.py", []),
+                ("restore_chain", "run_restore.py", ["--use-incremental-manifest"]),
                 ("verify_restore", "verify_restore.py", []),
             ]
         )
