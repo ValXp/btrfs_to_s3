@@ -10,6 +10,8 @@ Learnings
 - FYI: The integration harness requires sudo for loopback/mount operations (run with sudo -n when possible).
 - FYI: Config now includes a restore section; direct Config construction must supply RestoreConfig.
 - FYI: Restore verification uses the manifest snapshot path as its source reference and fails if that path is missing.
+- FYI: Default chunk size (200 GiB) exceeds S3 multipart part-size limits; implementations must stream parts <= 5 GiB.
+- FYI: Current chunking/restore code buffers full chunks; large defaults will OOM unless streaming is used.
 - FYI: Task 13 harness run failed during setup because losetup returned a non-zero exit status (loop device permissions).
 - FYI: Task 13 harness run still requires sudo for losetup; non-interactive sudo is unavailable (password required).
 - FYI: The latest `python3 testing/scripts/run_all.py --config testing/config/test.toml` attempt failed in `setup_btrfs.py` at `losetup --find --show` due to insufficient permissions.
@@ -17,3 +19,5 @@ Learnings
 - FYI: The harness snapshots_dir must live under the Btrfs mount (e.g., mount_dir/snapshots) for btrfs subvolume snapshot to succeed.
 - FYI: 'btrfs property set -ts <path> ro false' fails for received subvolumes unless you pass -f to clear received_uuid.
 - FYI: testing/scripts/mutate_data.py needed a local _write_binary helper (mirrors seed_data).
+
+- FYI: chunk_stream now requires consumers to fully read each chunk before requesting the next (RuntimeError otherwise) to keep stream boundaries intact.

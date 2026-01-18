@@ -31,7 +31,7 @@ from btrfs_to_s3.snapshots import SnapshotManager
 from btrfs_to_s3.chunker import chunk_stream
 from btrfs_to_s3.streamer import open_btrfs_send
 from btrfs_to_s3.state import State, SubvolumeState, load_state, save_state
-from btrfs_to_s3.uploader import S3Uploader
+from btrfs_to_s3.uploader import MAX_PART_SIZE, S3Uploader
 
 import boto3
 
@@ -174,8 +174,7 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
         bucket=config.s3.bucket,
         storage_class=config.s3.storage_class_chunks,
         sse=config.s3.sse,
-        part_size=config.s3.chunk_size_bytes,
-        multipart_threshold=config.s3.chunk_size_bytes,
+        part_size=min(config.s3.chunk_size_bytes, MAX_PART_SIZE),
     )
 
     snapshot_manager = SnapshotManager(
@@ -224,7 +223,7 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
                     f"{prefix}subvol/{subvol_name}/{effective_kind}/"
                     f"chunk-{timestamp}-{chunk.index}.bin"
                 )
-                result = chunk_uploader.upload_bytes(chunk_key, chunk.data)
+                result = chunk_uploader.upload_stream(chunk_key, chunk.reader)
                 chunks.append(
                     ChunkEntry(
                         key=chunk_key,

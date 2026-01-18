@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from btrfs_to_s3.uploader import RetryPolicy, S3Uploader, UploadError
 
@@ -96,6 +97,24 @@ class UploaderTests(unittest.TestCase):
         args = put_calls[0][1]
         self.assertEqual(args["ServerSideEncryption"], "AES256")
         self.assertEqual(args["StorageClass"], "STANDARD")
+
+    def test_multipart_part_size_is_capped(self) -> None:
+        client = FakeClient()
+        policy = RetryPolicy(max_attempts=2, sleep=lambda _: None, jitter=lambda d: d)
+        with mock.patch("btrfs_to_s3.uploader.MAX_PART_SIZE", 5):
+            uploader = S3Uploader(
+                client=client,
+                bucket="bucket",
+                storage_class="STANDARD",
+                sse="AES256",
+                part_size=10,
+                multipart_threshold=1,
+                retry_policy=policy,
+            )
+            uploader.upload_bytes("key", b"abcdefghij")
+        upload_calls = [call for call in client.calls if call[0] == "upload_part"]
+        sizes = [len(call[1]["Body"]) for call in upload_calls]
+        self.assertEqual(sizes, [5, 5])
 
 
 if __name__ == "__main__":

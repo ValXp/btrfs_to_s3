@@ -34,3 +34,6 @@
 - 2026-01-17 16:38 MST: Completed Task 12 restore verification; commit "Add restore verification".
 - 2026-01-17 16:49 MST: Blocked on Task 13 harness run (setup_btrfs losetup permission failure); commit "Record Task 13 harness block".
 - 2026-01-17 17:09 MST: Completed Task 13 integration harness (restore + multi-chunk); commit "Complete Task 13 harness run".
+- 2026-01-17 17:25 MST: Added follow-up tasks to address review findings (streamed chunking, schedule/lock integration, restore streaming, verification fallback, concurrency/spool). Next: start Task 1 in tasks.md.
+
+- 2026-01-17 17:28 MST: Completed Task 1 streamed chunking + multipart limits; commit "Stream chunks and cap multipart parts".

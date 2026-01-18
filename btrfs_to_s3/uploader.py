@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import random
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import BinaryIO, Callable, Iterator
+
+MiB = 1024 * 1024
+GiB = 1024 * 1024 * 1024
+MAX_PART_SIZE = 5 * GiB
+MIN_PART_SIZE = 5 * MiB
 
 
 class UploadError(RuntimeError):
@@ -49,7 +55,8 @@ class S3Uploader:
 
     def upload_bytes(self, key: str, data: bytes) -> UploadResult:
         if len(data) >= self.multipart_threshold:
-            return self._multipart_upload(key, data)
+            stream = io.BytesIO(b"")
+            return self._multipart_upload_stream(key, stream, data)
         response = self.client.put_object(
             Bucket=self.bucket,
             Key=key,
@@ -59,7 +66,26 @@ class S3Uploader:
         )
         return UploadResult(key=key, size=len(data), etag=response.get("ETag"))
 
-    def _multipart_upload(self, key: str, data: bytes) -> UploadResult:
+    def upload_stream(self, key: str, stream: BinaryIO) -> UploadResult:
+        part_size = self._effective_part_size()
+        threshold = max(self.multipart_threshold, MIN_PART_SIZE)
+        initial = self._read_until(stream, threshold + 1)
+        if not initial:
+            return self._put_object_stream(key, io.BytesIO(b""))
+        if len(initial) <= threshold:
+            return self._put_object_stream(key, io.BytesIO(initial))
+        return self._multipart_upload_stream(key, stream, initial, part_size=part_size)
+
+    def _multipart_upload_stream(
+        self,
+        key: str,
+        stream: BinaryIO,
+        initial: bytes,
+        part_size: int | None = None,
+    ) -> UploadResult:
+        if part_size is None:
+            part_size = self._effective_part_size()
+        part_size = self._effective_part_size(part_size)
         response = self.client.create_multipart_upload(
             Bucket=self.bucket,
             Key=key,
@@ -68,11 +94,11 @@ class S3Uploader:
         )
         upload_id = response["UploadId"]
         parts = []
+        total_size = 0
         try:
-            for part_number, offset in enumerate(
-                range(0, len(data), self.part_size), start=1
+            for part_number, part_data in enumerate(
+                self._iter_parts(stream, initial, part_size), start=1
             ):
-                part_data = data[offset : offset + self.part_size]
                 etag = self._upload_part_with_retry(
                     key=key,
                     upload_id=upload_id,
@@ -80,6 +106,7 @@ class S3Uploader:
                     data=part_data,
                 )
                 parts.append({"ETag": etag, "PartNumber": part_number})
+                total_size += len(part_data)
         except Exception as exc:
             self.client.abort_multipart_upload(
                 Bucket=self.bucket,
@@ -93,7 +120,7 @@ class S3Uploader:
             UploadId=upload_id,
             MultipartUpload={"Parts": parts},
         )
-        return UploadResult(key=key, size=len(data), etag=None)
+        return UploadResult(key=key, size=total_size, etag=None)
 
     def _upload_part_with_retry(
         self, key: str, upload_id: str, part_number: int, data: bytes
@@ -118,3 +145,54 @@ class S3Uploader:
                     self.retry_policy.base_delay * (2 ** (attempt - 1)),
                 )
                 self.retry_policy.sleep(self.retry_policy.jitter(delay))
+
+    def _put_object_stream(self, key: str, stream: BinaryIO) -> UploadResult:
+        size = 0
+        while True:
+            chunk = stream.read(64 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+        stream.seek(0)
+        response = self.client.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=stream,
+            StorageClass=self.storage_class,
+            ServerSideEncryption=self.sse,
+        )
+        return UploadResult(key=key, size=size, etag=response.get("ETag"))
+
+    def _effective_part_size(self, part_size: int | None = None) -> int:
+        if part_size is None:
+            part_size = self.part_size
+        return min(part_size, MAX_PART_SIZE)
+
+    def _read_until(self, stream: BinaryIO, target: int) -> bytes:
+        buffer = bytearray()
+        while len(buffer) < target:
+            data = stream.read(target - len(buffer))
+            if not data:
+                break
+            buffer.extend(data)
+        return bytes(buffer)
+
+    def _iter_parts(
+        self, stream: BinaryIO, initial: bytes, part_size: int
+    ) -> Iterator[bytes]:
+        buffer = bytearray(initial)
+        while True:
+            while len(buffer) < part_size:
+                data = stream.read(part_size - len(buffer))
+                if not data:
+                    break
+                buffer.extend(data)
+            if not buffer:
+                break
+            if len(buffer) <= part_size:
+                part = bytes(buffer)
+                buffer.clear()
+            else:
+                part = bytes(buffer[:part_size])
+                del buffer[:part_size]
+            yield part
