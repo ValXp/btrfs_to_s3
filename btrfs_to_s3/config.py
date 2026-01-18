@@ -28,6 +28,12 @@ DEFAULT_STORAGE_CLASS_CHUNKS = "DEEP_ARCHIVE"
 DEFAULT_STORAGE_CLASS_MANIFEST = "STANDARD"
 DEFAULT_S3_CONCURRENCY = 4
 DEFAULT_S3_SSE = "AES256"
+DEFAULT_RESTORE_TARGET_BASE_DIR = "/srv/restore"
+DEFAULT_RESTORE_VERIFY_MODE = "full"
+DEFAULT_RESTORE_SAMPLE_MAX_FILES = 1000
+DEFAULT_RESTORE_WAIT_FOR_RESTORE = True
+DEFAULT_RESTORE_TIMEOUT_SECONDS = 72 * 60 * 60
+DEFAULT_RESTORE_TIER = "Standard"
 
 
 class ConfigError(ValueError):
@@ -74,12 +80,23 @@ class S3Config:
 
 
 @dataclass(frozen=True)
+class RestoreConfig:
+    target_base_dir: Path
+    verify_mode: str
+    sample_max_files: int
+    wait_for_restore: bool
+    restore_timeout_seconds: int
+    restore_tier: str
+
+
+@dataclass(frozen=True)
 class Config:
     global_cfg: GlobalConfig
     schedule: ScheduleConfig
     snapshots: SnapshotsConfig
     subvolumes: SubvolumesConfig
     s3: S3Config
+    restore: RestoreConfig
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "Config":
@@ -88,6 +105,7 @@ class Config:
         snapshots_data = data.get("snapshots", {})
         subvolumes_data = data.get("subvolumes", {})
         s3_data = data.get("s3", {})
+        restore_data = data.get("restore", {})
 
         global_cfg = GlobalConfig(
             log_level=str(global_data.get("log_level", DEFAULT_LOG_LEVEL)),
@@ -136,12 +154,41 @@ class Config:
             concurrency=int(s3_data.get("concurrency", DEFAULT_S3_CONCURRENCY)),
             sse=str(s3_data.get("sse", DEFAULT_S3_SSE)),
         )
+        restore = RestoreConfig(
+            target_base_dir=_expand_path(
+                restore_data.get(
+                    "target_base_dir", DEFAULT_RESTORE_TARGET_BASE_DIR
+                )
+            ),
+            verify_mode=str(
+                restore_data.get("verify_mode", DEFAULT_RESTORE_VERIFY_MODE)
+            ),
+            sample_max_files=int(
+                restore_data.get(
+                    "sample_max_files", DEFAULT_RESTORE_SAMPLE_MAX_FILES
+                )
+            ),
+            wait_for_restore=bool(
+                restore_data.get(
+                    "wait_for_restore", DEFAULT_RESTORE_WAIT_FOR_RESTORE
+                )
+            ),
+            restore_timeout_seconds=int(
+                restore_data.get(
+                    "restore_timeout_seconds", DEFAULT_RESTORE_TIMEOUT_SECONDS
+                )
+            ),
+            restore_tier=str(
+                restore_data.get("restore_tier", DEFAULT_RESTORE_TIER)
+            ),
+        )
         config = Config(
             global_cfg=global_cfg,
             schedule=schedule,
             snapshots=snapshots,
             subvolumes=SubvolumesConfig(paths=subvolume_paths),
             s3=s3,
+            restore=restore,
         )
         validate_config(config)
         return config
@@ -197,6 +244,18 @@ def validate_config(config: Config) -> None:
         raise ConfigError("s3.storage_class_manifest is required")
     if not config.s3.sse:
         raise ConfigError("s3.sse is required")
+
+    _validate_path(config.restore.target_base_dir, "restore.target_base_dir")
+    if config.restore.verify_mode not in {"full", "sample", "none"}:
+        raise ConfigError("restore.verify_mode must be full, sample, or none")
+    _validate_positive(
+        config.restore.sample_max_files, "restore.sample_max_files"
+    )
+    _validate_positive(
+        config.restore.restore_timeout_seconds, "restore.restore_timeout_seconds"
+    )
+    if not config.restore.restore_tier:
+        raise ConfigError("restore.restore_tier is required")
 
 
 def _expand_path(raw: Any) -> Path:

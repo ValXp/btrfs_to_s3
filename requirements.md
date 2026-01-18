@@ -125,6 +125,8 @@ The scan helper lives at `scripts/fs_growth_analysis.sh`.
 - Must be testable against real AWS S3 while keeping costs low:
   - ability to use a dedicated test prefix/bucket
   - ability to override storage class to avoid long minimum-storage penalties during tests
+- Test harness must be able to generate multi-chunk uploads via large datasets
+  or reduced chunk size to exercise multipart and reassembly paths.
 - Provide a way to benchmark throughput and record basic run stats (bytes sent, time taken).
 
 ## Restore

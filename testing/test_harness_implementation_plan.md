@@ -11,6 +11,7 @@ Implementation Plan
     config/
       test.toml
       test.env
+      test_large.toml
     harness/
       __init__.py
       config.py
@@ -30,6 +31,7 @@ Implementation Plan
       run_incremental.py
       run_interrupt.py
       run_restore.py
+      run_large.py
       verify_manifest.py
       verify_s3.py
       verify_retention.py
@@ -55,6 +57,8 @@ Implementation Plan
       ```
   - `testing/harness/runner.py` reads `tool.cmd` or `BTRFS_TO_S3_CMD` env override and runs the CLI with the test config path.
   - Optionally set `PYTHONPATH` to repo root inside `runner.py` if not installed.
+  - Add `testing/config/test_large.toml` with a small `chunk_size_bytes` and
+    larger dataset defaults to force multi-chunk uploads.
 
 - Build Python harness modules (minimal deps).
   - `config.py` loads `test.toml` (use stdlib `tomllib` in 3.14).
@@ -70,6 +74,7 @@ Implementation Plan
   - `setup_btrfs.py` should chown `testing/run/` to `SUDO_USER` so non-root scripts can run after setup.
   - `seed_data.py` writes deterministic files (fixed sizes) to each subvolume.
   - `mutate_data.py` makes known changes for incremental runs.
+  - Both scripts accept a dataset size option to generate multi-chunk fixtures.
   - `teardown_btrfs.py` unmounts and detaches loop device.
 
 - Implement E2E run scripts (Python entry points).
@@ -77,6 +82,8 @@ Implementation Plan
   - `run_incremental.py` mutates then runs incremental.
   - `run_interrupt.py` starts a backup, kills it mid-stream, then reruns and verifies proper completion.
   - `run_restore.py` restores into a new subvolume target.
+  - `run_large.py` runs full + incremental with `test_large.toml` to force
+    multi-chunk uploads.
   - Restore runner should tolerate storage class restore delays (wait/poll).
 
 - Verification scripts (Python + boto3).
@@ -90,6 +97,7 @@ Implementation Plan
 
 - Orchestration.
   - `run_all.py` sequences: setup -> seed -> full -> mutate -> incremental -> interrupt -> restore -> verify -> teardown.
+  - `run_all.py` optionally runs the multi-chunk scenario (full + incremental).
   - `cleanup_s3_prefix.py` removes test objects under the configured prefix.
 
 - Documentation and hygiene.

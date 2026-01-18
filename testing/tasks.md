@@ -141,7 +141,19 @@ Required files
 Acceptance criteria
 - Each script exits non-zero on failure and writes helpful log output.
 
-Task 9: Restore Scripts + Verification (Agent J)
+Task 9: Orchestration + Cleanup (Agent I)
+Summary
+Create a top-level orchestrator and cleanup tool.
+
+Required files
+- `testing/scripts/run_all.py`: run setup -> seed -> full -> mutate -> incremental -> interrupt -> verify -> teardown.
+- `testing/scripts/cleanup_s3_prefix.py`: delete all objects under the test prefix.
+
+Acceptance criteria
+- `run_all.py` performs teardown even if a step fails (best-effort cleanup).
+- `cleanup_s3_prefix.py` requires explicit `--yes` confirmation.
+
+Task 10: Restore Scripts + Verification (Agent J)
 Summary
 Implement restore execution and full end-to-end verification.
 
@@ -162,15 +174,39 @@ Acceptance criteria
 - Verification fails on any mismatch (missing/extra file, hash mismatch) and reports the first discrepancy.
 - Scripts log to `testing/run/logs/` and exit non-zero on failure.
 
-Task 10: Orchestration + Cleanup (Agent I)
+Task 11: Multi-chunk Scenario (Agent K)
 Summary
-Create a top-level orchestrator and cleanup tool.
+Add a large-dataset scenario to force multi-chunk uploads and reassembly.
 
 Required files
-- `testing/scripts/run_all.py`: run setup -> seed -> full -> mutate -> incremental -> interrupt -> verify -> teardown.
-- `testing/scripts/cleanup_s3_prefix.py`: delete all objects under the test prefix.
+- `testing/config/test_large.toml`: smaller chunk size and larger dataset defaults.
+- `testing/scripts/run_large.py`: run full + incremental with the large dataset config.
+- Update `testing/scripts/seed_data.py` and `testing/scripts/mutate_data.py` to accept
+  a dataset size option.
+
+Behavior
+- `test_large.toml` sets a small `chunk_size_bytes` and a larger dataset size to
+  guarantee multiple chunks per subvolume.
+- `run_large.py` verifies that at least one subvolume produced multiple chunks
+  by checking the manifest or S3 listing.
 
 Acceptance criteria
-- `run_all.py` performs teardown even if a step fails (best-effort cleanup).
-- `run_all.py` includes restore + verify in the sequence.
-- `cleanup_s3_prefix.py` requires explicit `--yes` confirmation.
+- `seed_data.py` and `mutate_data.py` accept a dataset size option and generate
+  deterministic data of that size.
+- `run_large.py` uses `testing/config/test_large.toml` and fails if a multi-chunk
+  upload is not observed.
+- Logs are written under `testing/run/logs/`.
+
+Task 12: Orchestration Extensions (Agent I2)
+Summary
+Extend orchestration to include restore and the multi-chunk scenario.
+
+Required changes
+- Update `testing/scripts/run_all.py` to include restore + verify in sequence.
+- Add an optional flag to include the multi-chunk scenario.
+- Update `testing/README.md` to document the large scenario entrypoint.
+
+Acceptance criteria
+- `run_all.py` includes restore + verify by default.
+- `run_all.py --include-large` (or equivalent) runs the multi-chunk scenario.
+- Documentation references `testing/config/test_large.toml`.

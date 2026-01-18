@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROMPT_FILE="${ROOT_DIR}/prompt.md"
-STOP_FILE="${ROOT_DIR}/stop.md"
+STOP_FILE="${STOP_FILE:-${PWD}/stop.md}"
 
 CODEX_CMD="${CODEX_CMD:-codex}"
 CODEX_ARGS="${CODEX_ARGS:---dangerously-bypass-approvals-and-sandbox exec}"

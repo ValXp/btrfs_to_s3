@@ -101,7 +101,17 @@
   - Units reference config path and run `backup` at 2am local time.
   - Docs include installation, enablement, and log locations.
 
-### Task 10: Restore core
+### Task 10: Integration harness
+- Run existing test harness against AWS test bucket/prefix.
+- Ensure end-to-end run reports success with STANDARD storage class.
+- Acceptance criteria:
+  - Harness run completes without errors.
+  - Artifacts uploaded to test prefix with STANDARD storage class.
+  - Use `testing/config/test.toml` for bucket/prefix and `testing/config/test.env`
+    for credentials.
+  - Execute via `python3 testing/scripts/run_all.py --config testing/config/test.toml`.
+
+### Task 11: Restore core
 - Implement restore command and manifest resolution.
 - Download chunks, verify hashes, and reassemble stream.
 - `btrfs receive` into a new subvolume target path.
@@ -127,7 +137,7 @@
   - Unit test coverage >= 90% where reasonable.
   - All tests pass (including existing tests).
 
-### Task 11: Restore verification
+### Task 12: Restore verification
 - Implement metadata and content validation after restore.
 - Tests: unit tests for verification logic and failure reporting.
 - Acceptance criteria:
@@ -143,13 +153,14 @@
   - Unit test coverage >= 90% where reasonable.
   - All tests pass (including existing tests).
 
-### Task 12: Integration harness
+### Task 13: Integration harness with restore + multi-chunk
 - Run existing test harness against AWS test bucket/prefix.
 - Ensure end-to-end backup + restore run reports success with STANDARD storage class.
 - Acceptance criteria:
   - Harness run completes without errors.
   - Artifacts uploaded to test prefix with STANDARD storage class.
   - Restore validation passes for full and incremental runs.
+  - Multi-chunk scenario passes (using `testing/config/test_large.toml` or equivalent).
   - Use `testing/config/test.toml` for bucket/prefix and `testing/config/test.env`
     for credentials.
   - Execute via `python3 testing/scripts/run_all.py --config testing/config/test.toml`.

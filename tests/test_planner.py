@@ -9,6 +9,7 @@ from pathlib import Path
 from btrfs_to_s3.config import (
     Config,
     GlobalConfig,
+    RestoreConfig,
     S3Config,
     ScheduleConfig,
     SnapshotsConfig,
@@ -43,6 +44,14 @@ def make_config() -> Config:
             storage_class_manifest="STANDARD",
             concurrency=1,
             sse="AES256",
+        ),
+        restore=RestoreConfig(
+            target_base_dir=Path("/srv/restore"),
+            verify_mode="full",
+            sample_max_files=100,
+            wait_for_restore=True,
+            restore_timeout_seconds=3600,
+            restore_tier="Standard",
         ),
     )
 

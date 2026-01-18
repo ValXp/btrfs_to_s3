@@ -62,6 +62,7 @@ from S3 back into a new Btrfs subvolume. This plan excludes the test harness
    - Unit tests for planner, state, manifest, config, chunking.
    - Unit tests for restore chain resolution and verification.
    - Harness integration for end-to-end S3 + restore flow.
+   - Include a multi-chunk harness run to exercise multipart uploads and restore reassembly.
 
 ## Risks / open decisions
 ## Risks / open decisions
