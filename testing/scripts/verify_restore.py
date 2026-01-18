@@ -25,12 +25,17 @@ DEFAULT_CONFIG = os.path.abspath(
 )
 DEFAULT_SAMPLE_SIZE = 25
 RESTORE_METADATA_FILE = "restore_target.json"
+RESTORE_TARGETS_FILE = "restore_targets.json"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify restored subvolume content.")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
-    parser.add_argument("--subvolume", default=None)
+    parser.add_argument(
+        "--subvolume",
+        default=None,
+        help="Subvolume name or 'all' to verify every restored subvolume.",
+    )
     parser.add_argument("--source-snapshot", default=None)
     parser.add_argument("--target", default=None)
     parser.add_argument("--target-base", default=None)
@@ -52,40 +57,53 @@ def main() -> int:
             log.write("restore verification skipped")
             return 0
         try:
-            subvolume = _resolve_subvolume(args.subvolume, config)
-            source_path = _resolve_source_snapshot(
-                args.source_snapshot,
-                paths["snapshots_dir"],
-                subvolume,
-            )
-            target_path = _resolve_target_path(args, paths, subvolume)
+            subvolumes = _resolve_subvolumes(args.subvolume, config)
+            if len(subvolumes) > 1 and args.target:
+                raise ValueError("--target is only valid for a single subvolume")
         except ValueError as exc:
             log.write(str(exc), level="ERROR")
             return 1
 
-        log.write(f"source snapshot: {source_path}")
-        log.write(f"target restore: {target_path}")
+        for subvolume in subvolumes:
+            try:
+                source_path = _resolve_source_snapshot(
+                    args.source_snapshot,
+                    paths["snapshots_dir"],
+                    subvolume,
+                )
+                target_path = _resolve_target_path(
+                    args,
+                    paths,
+                    subvolume,
+                    require_mapping=len(subvolumes) > 1,
+                )
+            except ValueError as exc:
+                log.write(str(exc), level="ERROR")
+                return 1
 
-        try:
-            _verify_metadata(target_path)
-        except (RuntimeError, subprocess.CalledProcessError) as exc:
-            log.write(str(exc), level="ERROR")
-            return 1
+            log.write(f"source snapshot: {source_path}")
+            log.write(f"target restore: {target_path}")
 
-        try:
-            mismatch = _verify_content(
-                source_path,
-                target_path,
-                mode=args.mode,
-                sample_size=args.sample_size,
-            )
-        except RuntimeError as exc:
-            log.write(str(exc), level="ERROR")
-            return 1
+            try:
+                _verify_metadata(target_path)
+            except (RuntimeError, subprocess.CalledProcessError) as exc:
+                log.write(str(exc), level="ERROR")
+                return 1
 
-        if mismatch:
-            log.write(mismatch, level="ERROR")
-            return 1
+            try:
+                mismatch = _verify_content(
+                    source_path,
+                    target_path,
+                    mode=args.mode,
+                    sample_size=args.sample_size,
+                )
+            except RuntimeError as exc:
+                log.write(str(exc), level="ERROR")
+                return 1
+
+            if mismatch:
+                log.write(mismatch, level="ERROR")
+                return 1
 
         log.write("restore verification passed")
         return 0
@@ -103,17 +121,19 @@ def _config_disables_verify(config: dict) -> bool:
     return False
 
 
-def _resolve_subvolume(requested: str | None, config: dict) -> str:
+def _resolve_subvolumes(requested: str | None, config: dict) -> list[str]:
     subvolumes = config["btrfs"]["subvolumes"]
     if requested is None:
         if not subvolumes:
             raise ValueError("config has no btrfs.subvolumes entries")
-        return subvolumes[0]
+        return [subvolumes[0]]
+    if requested == "all":
+        return list(subvolumes)
     if requested not in subvolumes:
         raise ValueError(
             f"subvolume {requested} not in config list: {', '.join(subvolumes)}"
         )
-    return requested
+    return [requested]
 
 
 def _resolve_source_snapshot(
@@ -152,7 +172,13 @@ def _resolve_source_snapshot(
     return candidates[0][1]
 
 
-def _resolve_target_path(args, paths: dict[str, str], subvolume: str) -> str:
+def _resolve_target_path(
+    args,
+    paths: dict[str, str],
+    subvolume: str,
+    *,
+    require_mapping: bool,
+) -> str:
     if args.target:
         target_path = os.path.abspath(args.target)
         if not os.path.exists(target_path):
@@ -160,6 +186,21 @@ def _resolve_target_path(args, paths: dict[str, str], subvolume: str) -> str:
         return target_path
 
     run_dir = os.path.abspath(paths["run_dir"])
+    targets_path = os.path.join(run_dir, RESTORE_TARGETS_FILE)
+    if os.path.exists(targets_path):
+        try:
+            with open(targets_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid restore metadata: {targets_path}") from exc
+        for entry in payload.get("targets", []):
+            if entry.get("subvolume") == subvolume:
+                target_path = os.path.abspath(entry.get("target_path", ""))
+                if target_path and os.path.exists(target_path):
+                    return target_path
+        if require_mapping:
+            raise ValueError(f"restore target missing for {subvolume}")
+
     metadata_path = os.path.join(run_dir, RESTORE_METADATA_FILE)
     if os.path.exists(metadata_path):
         try:

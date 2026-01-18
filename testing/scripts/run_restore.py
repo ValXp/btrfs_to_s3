@@ -30,7 +30,11 @@ DEFAULT_MANIFEST_KEY = None
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a restore into a new target.")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
-    parser.add_argument("--subvolume", default=None)
+    parser.add_argument(
+        "--subvolume",
+        default=None,
+        help="Subvolume name or 'all' to restore every subvolume.",
+    )
     parser.add_argument("--target-base", default=None)
     parser.add_argument("--target-name", default=None)
     parser.add_argument("--target", default=None)
@@ -58,56 +62,78 @@ def main() -> int:
     with open_log(log_path) as log:
         log.write(f"loading config from {config_path}")
         try:
-            subvolume = _resolve_subvolume(args.subvolume, config)
-            target_path = _resolve_target_path(args, paths, subvolume)
-            manifest_key = _resolve_manifest_key(args, config, subvolume, log)
+            subvolumes = _resolve_subvolumes(args.subvolume, config)
+            if len(subvolumes) > 1 and (args.manifest_key or args.use_incremental_manifest):
+                raise ValueError(
+                    "--manifest-key and --use-incremental-manifest require a single subvolume"
+                )
+            if len(subvolumes) > 1 and args.target:
+                raise ValueError("--target is only valid for a single subvolume")
+            if len(subvolumes) > 1 and args.target_name:
+                raise ValueError("--target-name is only valid for a single subvolume")
         except ValueError as exc:
             log.write(str(exc), level="ERROR")
             return 1
 
-        log.write(f"restoring subvolume {subvolume} to {target_path}")
-        if manifest_key:
-            log.write(f"using manifest key {manifest_key}")
-        if args.dry_run:
-            log.write("dry run: printing command only")
+        restore_entries: list[dict[str, str]] = []
+        for subvolume in subvolumes:
+            try:
+                target_path = _resolve_target_path(args, paths, subvolume)
+                manifest_key = _resolve_manifest_key(args, config, subvolume, log)
+            except ValueError as exc:
+                log.write(str(exc), level="ERROR")
+                return 1
 
-        extra_args = ["restore", "--subvolume", subvolume, "--target", target_path]
-        if manifest_key:
-            extra_args.extend(["--manifest-key", manifest_key])
-        if args.restore_timeout is not None:
-            extra_args.extend(["--restore-timeout", str(args.restore_timeout)])
+            log.write(f"restoring subvolume {subvolume} to {target_path}")
+            if manifest_key:
+                log.write(f"using manifest key {manifest_key}")
+            if args.dry_run:
+                log.write("dry run: printing command only")
 
-        try:
-            result = run_tool(
-                config_path,
-                extra_args,
-                dry_run=args.dry_run,
-            )
-            if result:
-                _log_process(log, "restore", result)
-            if not args.dry_run:
-                _write_restore_metadata(paths["run_dir"], subvolume, target_path)
-        except subprocess.CalledProcessError as exc:
-            _log_process_error(log, "restore", exc)
-            return 1
-        except Exception as exc:
-            log.write(f"restore failed: {exc}", level="ERROR")
-            return 1
+            extra_args = ["restore", "--subvolume", subvolume, "--target", target_path]
+            if manifest_key:
+                extra_args.extend(["--manifest-key", manifest_key])
+            if args.restore_timeout is not None:
+                extra_args.extend(["--restore-timeout", str(args.restore_timeout)])
+
+            try:
+                result = run_tool(
+                    config_path,
+                    extra_args,
+                    dry_run=args.dry_run,
+                )
+                if result:
+                    _log_process(log, f"restore[{subvolume}]", result)
+                if not args.dry_run:
+                    restore_entries.append(
+                        {"subvolume": subvolume, "target_path": target_path}
+                    )
+            except subprocess.CalledProcessError as exc:
+                _log_process_error(log, f"restore[{subvolume}]", exc)
+                return 1
+            except Exception as exc:
+                log.write(f"restore failed: {exc}", level="ERROR")
+                return 1
+
+        if restore_entries and not args.dry_run:
+            _write_restore_metadata(paths["run_dir"], restore_entries)
 
     return 0
 
 
-def _resolve_subvolume(requested: str | None, config: dict) -> str:
+def _resolve_subvolumes(requested: str | None, config: dict) -> list[str]:
     subvolumes = config["btrfs"]["subvolumes"]
     if requested is None:
         if not subvolumes:
             raise ValueError("config has no btrfs.subvolumes entries")
-        return subvolumes[0]
+        return [subvolumes[0]]
+    if requested == "all":
+        return list(subvolumes)
     if requested not in subvolumes:
         raise ValueError(
             f"subvolume {requested} not in config list: {', '.join(subvolumes)}"
         )
-    return requested
+    return [requested]
 
 
 def _resolve_manifest_key(
@@ -181,18 +207,26 @@ def _default_target_name(subvolume: str) -> str:
     return f"{subvolume}__restore__{timestamp}"
 
 
-def _write_restore_metadata(run_dir: str, subvolume: str, target_path: str) -> None:
-    payload = {
-        "subvolume": subvolume,
-        "target_path": target_path,
-        "written_at": datetime.datetime.now(datetime.timezone.utc)
+def _write_restore_metadata(run_dir: str, entries: list[dict[str, str]]) -> None:
+    written_at = (
+        datetime.datetime.now(datetime.timezone.utc)
         .isoformat(timespec="seconds")
-        .replace("+00:00", "Z"),
-    }
-    metadata_path = os.path.join(run_dir, "restore_target.json")
+        .replace("+00:00", "Z")
+    )
+    payload = {"written_at": written_at, "targets": entries}
+    metadata_path = os.path.join(run_dir, "restore_targets.json")
     os.makedirs(run_dir, exist_ok=True)
     with open(metadata_path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
+    if len(entries) == 1:
+        single_payload = {
+            "subvolume": entries[0]["subvolume"],
+            "target_path": entries[0]["target_path"],
+            "written_at": written_at,
+        }
+        single_path = os.path.join(run_dir, "restore_target.json")
+        with open(single_path, "w", encoding="utf-8") as handle:
+            json.dump(single_payload, handle, indent=2, sort_keys=True)
 
 
 def _ensure_under_root(root: str, path: str) -> None:
