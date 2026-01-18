@@ -20,3 +20,4 @@ Progress
 - 2026-01-17 18:33 - done - Verify S3 layout and chunk metadata
 - 2026-01-17 18:35 - done - Add incremental manifest restore coverage
 - 2026-01-17 18:38 - done - Add archive restore scenario
+- 2026-01-17 18:39 - done - Add CLI flag coverage script
