@@ -1,0 +1,119 @@
+{
+  "type": "object",
+  "required": [
+    "version",
+    "subvolume",
+    "kind",
+    "created_at",
+    "snapshot",
+    "parent_manifest",
+    "chunks",
+    "total_bytes",
+    "chunk_size",
+    "s3"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "subvolume": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "full",
+        "incremental"
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "snapshot": {
+      "type": "object",
+      "required": [
+        "name",
+        "path",
+        "uuid",
+        "parent_uuid"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "uuid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent_uuid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "parent_manifest": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "chunks": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "size",
+          "sha256",
+          "etag"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "etag": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "total_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "chunk_size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "s3": {
+      "type": "object",
+      "required": [
+        "storage_class"
+      ],
+      "properties": {
+        "storage_class": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

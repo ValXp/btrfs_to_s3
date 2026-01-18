@@ -14,7 +14,6 @@ Progress
 - Next: implement Task 11 (multi-chunk scenario) and Task 12 (orchestration extensions)
 - 2026-01-17 16:11 - done - Add restore run and verification scripts
 - 2026-01-17 16:18 - done - Add multi-chunk scenario and orchestration updates
-- 2026-01-17 16:20 - blocked - Log run status: no pending tasks
-- 2026-01-17 16:21 - blocked - No pending tasks; stop marker already present
-- 2026-01-17 16:22 - blocked - No pending tasks; stop marker already present
-- 2026-01-17 16:22 - blocked - No pending tasks; stop marker already present
+- 2026-01-17 18:25 - done - Force incremental runs with --once
+- 2026-01-17 18:28 - done - Cover all subvolumes in backup runs
+- 2026-01-17 18:31 - done - Validate S3 manifest and current pointer

@@ -10,6 +10,24 @@ import os
 DEFAULT_SCHEMA_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, "expected", "manifest_schema.json")
 )
+DEFAULT_FULL_SCHEMA_PATH = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__),
+        os.pardir,
+        "expected",
+        "manifest_schema_full.json",
+    )
+)
+
+CURRENT_POINTER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["manifest_key", "kind", "created_at"],
+    "properties": {
+        "manifest_key": {"type": "string"},
+        "kind": {"type": "string", "enum": ["full", "incremental"]},
+        "created_at": {"type": "string"},
+    },
+}
 
 
 def load_manifest(path: str) -> dict[str, Any]:
@@ -18,6 +36,14 @@ def load_manifest(path: str) -> dict[str, Any]:
         data = json.load(handle)
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected JSON object")
+    return data
+
+
+def load_json_bytes(payload: bytes, label: str) -> dict[str, Any]:
+    """Load JSON payload bytes into a dict."""
+    data = json.loads(payload)
+    if not isinstance(data, dict):
+        raise ValueError(f"{label}: expected JSON object")
     return data
 
 
@@ -44,25 +70,34 @@ def validate_manifest(
     return errors
 
 
+def validate_current_pointer(pointer: dict[str, Any]) -> list[str]:
+    """Validate current.json pointer payload."""
+    return _validate_schema(pointer, CURRENT_POINTER_SCHEMA, path="$")
+
+
 def _validate_chunks(manifest: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     chunks = manifest.get("chunks")
     if not isinstance(chunks, list):
         return errors
+    has_index = any(
+        isinstance(chunk, dict) and "index" in chunk for chunk in chunks
+    )
     last_index: int | None = None
     for position, chunk in enumerate(chunks):
         if not isinstance(chunk, dict):
             errors.append(f"chunks[{position}]: expected object")
             continue
-        index = chunk.get("index")
-        if not isinstance(index, int):
-            errors.append(f"chunks[{position}]: missing or invalid index")
-        else:
-            if last_index is not None and index <= last_index:
-                errors.append(
-                    f"chunks[{position}]: index {index} not greater than {last_index}"
-                )
-            last_index = index
+        if has_index:
+            index = chunk.get("index")
+            if not isinstance(index, int):
+                errors.append(f"chunks[{position}]: missing or invalid index")
+            else:
+                if last_index is not None and index <= last_index:
+                    errors.append(
+                        f"chunks[{position}]: index {index} not greater than {last_index}"
+                    )
+                last_index = index
         if not _has_hash(chunk):
             errors.append(f"chunks[{position}]: missing hash field")
     return errors
@@ -121,7 +156,9 @@ def _validate_schema(value: Any, schema: dict[str, Any], *, path: str) -> list[s
     return errors
 
 
-def _matches_type(value: Any, expected: str) -> bool:
+def _matches_type(value: Any, expected: Any) -> bool:
+    if isinstance(expected, list):
+        return any(_matches_type(value, item) for item in expected)
     if expected == "object":
         return isinstance(value, dict)
     if expected == "array":
@@ -134,4 +171,6 @@ def _matches_type(value: Any, expected: str) -> bool:
         return isinstance(value, (int, float))
     if expected == "boolean":
         return isinstance(value, bool)
+    if expected == "null":
+        return value is None
     return True
