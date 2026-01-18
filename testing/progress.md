@@ -24,3 +24,4 @@ Progress
 - 2026-01-17 18:40 - done - Add lock contention coverage
 - 2026-01-17 18:42 - done - Add spool configuration coverage
 - 2026-01-17 18:44 - done - Support all-subvolume restore verification
+- 2026-01-17 18:45 - done - Add stop marker
