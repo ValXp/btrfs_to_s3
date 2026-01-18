@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+_THROUGHPUT_UNITS = ("B/s", "KB/s", "MB/s", "GB/s", "TB/s", "PB/s")
+
 
 @dataclass(frozen=True)
 class Metrics:
@@ -30,3 +32,12 @@ def calculate_metrics(total_bytes: int, elapsed_seconds: float) -> Metrics:
     if elapsed_seconds < 0:
         raise ValueError("elapsed_seconds must be >= 0")
     return Metrics(total_bytes=total_bytes, elapsed_seconds=elapsed_seconds)
+
+
+def format_throughput(bytes_per_sec: float) -> str:
+    value = max(bytes_per_sec, 0.0)
+    unit_index = 0
+    while value >= 1000.0 and unit_index < len(_THROUGHPUT_UNITS) - 1:
+        value /= 1000.0
+        unit_index += 1
+    return f"{value:.2f}{_THROUGHPUT_UNITS[unit_index]}"

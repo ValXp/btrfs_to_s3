@@ -186,7 +186,7 @@ class RestoreTests(unittest.TestCase):
         )
         output = io.BytesIO()
 
-        restore.download_and_verify_chunks(
+        total_bytes = restore.download_and_verify_chunks(
             client,
             "bucket",
             [chunk],
@@ -195,6 +195,7 @@ class RestoreTests(unittest.TestCase):
         )
 
         self.assertEqual(output.getvalue(), payload)
+        self.assertEqual(total_bytes, len(payload))
         self.assertTrue(all(size == 4 for size in body.read_sizes))
         self.assertGreater(len(body.read_sizes), 2)
 

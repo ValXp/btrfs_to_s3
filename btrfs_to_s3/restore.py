@@ -186,9 +186,10 @@ def download_and_verify_chunks(
     output: IO[bytes],
     *,
     read_size: int = 1024 * 1024,
-) -> None:
+) -> int:
     if read_size <= 0:
         raise RestoreError("read_size must be positive")
+    total_bytes = 0
     for chunk in chunks:
         response = client.get_object(Bucket=bucket, Key=chunk.key)
         body = response["Body"]
@@ -199,9 +200,11 @@ def download_and_verify_chunks(
                 break
             hasher.update(data)
             output.write(data)
+            total_bytes += len(data)
         digest = hasher.hexdigest()
         if digest != chunk.sha256:
             raise RestoreError(f"hash mismatch for {chunk.key}")
+    return total_bytes
 
 
 def restore_chain(
@@ -213,10 +216,11 @@ def restore_chain(
     wait_for_restore: bool,
     restore_tier: str,
     restore_timeout_seconds: int,
-) -> None:
+) -> int:
     if target.exists():
         raise RestoreError(f"target path already exists: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
+    total_bytes = 0
     for manifest in manifests:
         if wait_for_restore:
             storage_class = manifest.s3.get("storage_class")
@@ -228,9 +232,10 @@ def restore_chain(
                 restore_tier=restore_tier,
                 timeout_seconds=restore_timeout_seconds,
             )
-        created = _apply_manifest_stream(
+        created, bytes_written = _apply_manifest_stream(
             client, bucket, manifest, target.parent
         )
+        total_bytes += bytes_written
         if created != target:
             if created.exists():
                 if target.exists():
@@ -240,6 +245,7 @@ def restore_chain(
                 raise RestoreError(f"received subvolume missing: {created}")
     if target.exists():
         _set_subvolume_writable(target)
+    return total_bytes
 
 
 def verify_metadata(
@@ -347,7 +353,7 @@ def _apply_manifest_stream(
     bucket: str,
     manifest: ManifestInfo,
     receive_dir: Path,
-) -> Path:
+) -> tuple[Path, int]:
     snapshot_path = manifest.snapshot_path
     if not snapshot_path:
         raise RestoreError(f"{manifest.key} missing snapshot path")
@@ -358,13 +364,15 @@ def _apply_manifest_stream(
     )
     assert proc.stdin is not None
     try:
-        download_and_verify_chunks(client, bucket, manifest.chunks, proc.stdin)
+        bytes_written = download_and_verify_chunks(
+            client, bucket, manifest.chunks, proc.stdin
+        )
     finally:
         proc.stdin.close()
     code = proc.wait()
     if code != 0:
         raise RestoreError(f"btrfs receive failed with exit code {code}")
-    return receive_dir / subvol_name
+    return receive_dir / subvol_name, bytes_written
 
 
 def _fetch_json(client, bucket: str, key: str) -> dict[str, Any]:

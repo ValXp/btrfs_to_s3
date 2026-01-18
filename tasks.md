@@ -87,3 +87,23 @@
   - Missing `last_manifest` forces a full backup (not an incremental).
   - Manifest chains always resolve to a full backup.
   - Unit tests cover missing parent manifest fallback.
+
+### Task 10: Log upload/restore throughput metrics
+- Scope: `btrfs_to_s3/cli.py`, `btrfs_to_s3/restore.py`, `btrfs_to_s3/metrics.py`.
+- Log end-to-end throughput for uploads (per subvolume) and restores using
+  monotonic timing and total bytes processed.
+- Acceptance criteria:
+  - Backup logs include `event=backup_metrics` with total bytes, elapsed seconds,
+    and throughput in human-readable units with values < 1,000.
+  - Restore logs include `event=restore_metrics` with total bytes, elapsed seconds,
+    and throughput in human-readable units with values < 1,000.
+  - Unit tests cover metric calculation/logging for both backup and restore flows.
+
+### Task 11: Document all config parameters in README
+- Scope: `README.md`.
+- Ensure every configuration parameter has a detailed description, including
+  constraints and interactions (e.g., how `s3.concurrency` affects multipart
+  uploads and how spool limits cap effective concurrency).
+- Acceptance criteria:
+  - All config keys in the example/config schema are described in README.
+  - Each description includes defaults and any constraints/side effects.

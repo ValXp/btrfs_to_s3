@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -34,8 +35,7 @@ from btrfs_to_s3.planner import PlanItem, plan_backups
 from btrfs_to_s3.streamer import open_btrfs_send
 from btrfs_to_s3.state import State, SubvolumeState, load_state, save_state
 from btrfs_to_s3.uploader import MAX_PART_SIZE, S3Uploader
-
-import boto3
+from btrfs_to_s3.metrics import calculate_metrics, format_throughput
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
@@ -190,7 +190,11 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
             logger.info("event=backup_no_s3 status=skipped")
             return 0
 
-        client = boto3.client("s3", region_name=config.s3.region)
+        try:
+            client = _get_s3_client(config.s3.region)
+        except RuntimeError as exc:
+            logger.error("event=backup_s3_client_failed error=%s", exc)
+            return 1
         chunk_uploader = S3Uploader(
             client,
             bucket=config.s3.bucket,
@@ -244,6 +248,7 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
             send_parent = (
                 parent_snapshot if effective_kind == "incremental" else None
             )
+            start_time = time.monotonic()
             stream = open_btrfs_send(snapshot.path, send_parent)
             chunks: list[ChunkEntry] = []
             local_chunks: list[dict[str, object]] = []
@@ -325,6 +330,15 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
                 pointer=pointer,
                 storage_class=config.s3.storage_class_manifest,
                 sse=config.s3.sse,
+            )
+            elapsed = time.monotonic() - start_time
+            metrics = calculate_metrics(total_bytes, elapsed)
+            logger.info(
+                "event=backup_metrics subvolume=%s total_bytes=%d elapsed_seconds=%.3f throughput=%s",
+                subvol_name,
+                metrics.total_bytes,
+                metrics.elapsed_seconds,
+                format_throughput(metrics.throughput_bytes_per_sec),
             )
             logger.info(
                 "event=backup_uploaded subvolume=%s manifest_key=%s chunk_count=%d",
@@ -440,6 +454,14 @@ def _has_aws_credentials() -> bool:
     return bool(access_key and secret_key)
 
 
+def _get_s3_client(region: str):
+    try:
+        import boto3
+    except ImportError as exc:
+        raise RuntimeError("boto3 is required for S3 operations") from exc
+    return boto3.client("s3", region_name=region)
+
+
 def _load_and_override_config(args: argparse.Namespace) -> Config:
     config = load_config(Path(args.config).expanduser())
     if args.log_level:
@@ -493,7 +515,11 @@ def run_restore(args: argparse.Namespace, config: Config) -> int:
         logger.error("event=restore_no_credentials status=failed")
         return 1
 
-    client = boto3.client("s3", region_name=config.s3.region)
+    try:
+        client = _get_s3_client(config.s3.region)
+    except RuntimeError as exc:
+        logger.error("event=restore_s3_client_failed error=%s", exc)
+        return 1
     prefix = config.s3.prefix.rstrip("/")
     if prefix:
         prefix = prefix + "/"
@@ -526,8 +552,9 @@ def run_restore(args: argparse.Namespace, config: Config) -> int:
         if args.restore_timeout is not None
         else config.restore.restore_timeout_seconds
     )
+    start_time = time.monotonic()
     try:
-        restore_chain(
+        total_bytes = restore_chain(
             client,
             config.s3.bucket,
             manifests,
@@ -539,6 +566,15 @@ def run_restore(args: argparse.Namespace, config: Config) -> int:
     except RestoreError as exc:
         logger.error("event=restore_failed error=%s", exc)
         return 1
+    elapsed = time.monotonic() - start_time
+    metrics = calculate_metrics(total_bytes, elapsed)
+    logger.info(
+        "event=restore_metrics subvolume=%s total_bytes=%d elapsed_seconds=%.3f throughput=%s",
+        args.subvolume,
+        metrics.total_bytes,
+        metrics.elapsed_seconds,
+        format_throughput(metrics.throughput_bytes_per_sec),
+    )
     verify_mode = (
         args.verify if args.verify is not None else config.restore.verify_mode
     )
