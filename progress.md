@@ -47,3 +47,4 @@
 - 2026-01-17 18:07 MST: Completed Task 9 incremental manifest parent validation; commit "Validate manifest parents for incrementals".
 - 2026-01-17 18:10 MST: Completed Task 8 stale lock recovery tests; commit "Test stale lock recovery in CLI".
 - 2026-01-18 15:43 MST: Completed Task 10 log throughput metrics; commit "Log backup and restore metrics".
+- 2026-01-18 15:46 MST: Completed Task 11 config documentation; commit "Document config parameters".
