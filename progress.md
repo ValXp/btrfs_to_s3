@@ -42,3 +42,4 @@
 - 2026-01-17 17:39 MST: Completed Task 4 lock during backups; commit "Lock backups in CLI".
 - 2026-01-17 17:42 MST: Completed Task 5 missing parent fallback; commit "Fallback to full when parent missing".
 - 2026-01-17 17:43 MST: Completed Task 6 restore verification without local snapshot; commit "Allow restore verification without source".
+- 2026-01-17 17:51 MST: Completed Task 7 upload concurrency and spooling; commit "Add upload concurrency and spooling".
