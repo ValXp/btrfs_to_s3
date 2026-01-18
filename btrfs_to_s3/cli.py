@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import os
@@ -11,6 +10,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
+import subprocess
 
 from btrfs_to_s3.config import (
     Config,
@@ -19,6 +19,7 @@ from btrfs_to_s3.config import (
     load_config,
     validate_config,
 )
+from btrfs_to_s3.manifest import ChunkEntry, CurrentPointer, Manifest, SnapshotInfo, publish_manifest
 from btrfs_to_s3.restore import (
     RestoreError,
     fetch_current_manifest_key,
@@ -26,6 +27,10 @@ from btrfs_to_s3.restore import (
     restore_chain,
     verify_restore,
 )
+from btrfs_to_s3.snapshots import SnapshotManager
+from btrfs_to_s3.chunker import chunk_stream
+from btrfs_to_s3.streamer import open_btrfs_send
+from btrfs_to_s3.state import State, SubvolumeState, load_state, save_state
 from btrfs_to_s3.uploader import S3Uploader
 
 import boto3
@@ -135,44 +140,36 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
     if backup_type not in ("full", "incremental"):
         backup_type = "full"
 
+    snapshot_kind = "full" if backup_type == "full" else "inc"
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    payload = f"btrfs_to_s3 test payload {timestamp}\n".encode("utf-8")
-    sha256 = hashlib.sha256(payload).hexdigest()
-
     prefix = config.s3.prefix.rstrip("/")
     if prefix:
         prefix = prefix + "/"
-    chunk_key = f"{prefix}{backup_type}/chunk-{timestamp}.bin"
-    manifest_key = f"{prefix}{backup_type}/manifest-{timestamp}.json"
-
-    manifest = {
-        "backup_type": backup_type,
-        "chunks": [
-            {
-                "index": 0,
-                "key": chunk_key,
-                "sha256": sha256,
-            }
-        ],
-    }
-    manifest_bytes = json.dumps(
-        manifest, indent=2, sort_keys=True
-    ).encode("utf-8")
 
     run_dir = os.environ.get("BTRFS_TO_S3_HARNESS_RUN_DIR")
-    if run_dir:
-        os.makedirs(run_dir, exist_ok=True)
-        manifest_path = os.path.join(run_dir, "manifest.json")
-        with open(manifest_path, "w", encoding="utf-8") as handle:
-            json.dump(manifest, handle, indent=2, sort_keys=True)
-        logger.info("event=manifest_written path=%s", manifest_path)
+    write_manifest = run_dir is not None
+
+    state = load_state(config.global_cfg.state_path)
+    state_subvols = dict(state.subvolumes)
+
+    subvolume_paths = list(config.subvolumes.paths)
+    if args.subvolume:
+        selected = [
+            path for path in subvolume_paths if path.name in set(args.subvolume)
+        ]
+    else:
+        selected = subvolume_paths[:1] if write_manifest else subvolume_paths
+
+    if not selected:
+        logger.error("event=backup_no_subvolumes status=failed")
+        return 2
 
     if args.no_s3 or not _has_aws_credentials():
         logger.info("event=backup_no_s3 status=skipped")
         return 0
 
     client = boto3.client("s3", region_name=config.s3.region)
-    uploader = S3Uploader(
+    chunk_uploader = S3Uploader(
         client,
         bucket=config.s3.bucket,
         storage_class=config.s3.storage_class_chunks,
@@ -180,18 +177,169 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
         part_size=config.s3.chunk_size_bytes,
         multipart_threshold=config.s3.chunk_size_bytes,
     )
-    uploader.upload_bytes(chunk_key, payload)
-    manifest_uploader = S3Uploader(
-        client,
-        bucket=config.s3.bucket,
-        storage_class=config.s3.storage_class_manifest,
-        sse=config.s3.sse,
-        part_size=config.s3.chunk_size_bytes,
-        multipart_threshold=config.s3.chunk_size_bytes,
+
+    snapshot_manager = SnapshotManager(
+        config.snapshots.base_dir,
+        _ShellRunner(),
     )
-    manifest_uploader.upload_bytes(manifest_key, manifest_bytes)
-    logger.info("event=backup_stub status=ok chunk_key=%s", chunk_key)
+
+    for subvolume_path in selected:
+        subvol_name = subvolume_path.name
+        subvol_state = state_subvols.get(subvol_name, SubvolumeState())
+        parent_snapshot = (
+            Path(subvol_state.last_snapshot)
+            if subvol_state.last_snapshot
+            else None
+        )
+        parent_manifest = subvol_state.last_manifest
+        effective_kind = backup_type
+        effective_snapshot_kind = snapshot_kind
+        if backup_type == "incremental" and parent_snapshot is None:
+            effective_kind = "full"
+            effective_snapshot_kind = "full"
+            parent_manifest = None
+
+        snapshot = snapshot_manager.create_snapshot(
+            subvolume_path, subvol_name, effective_snapshot_kind
+        )
+        logger.info(
+            "event=snapshot_created subvolume=%s path=%s kind=%s",
+            subvol_name,
+            snapshot.path,
+            effective_snapshot_kind,
+        )
+
+        send_parent = (
+            parent_snapshot if effective_kind == "incremental" else None
+        )
+        stream = open_btrfs_send(snapshot.path, send_parent)
+        chunks: list[ChunkEntry] = []
+        local_chunks: list[dict[str, object]] = []
+        total_bytes = 0
+        try:
+            for chunk in chunk_stream(
+                stream.stdout, config.s3.chunk_size_bytes
+            ):
+                chunk_key = (
+                    f"{prefix}subvol/{subvol_name}/{effective_kind}/"
+                    f"chunk-{timestamp}-{chunk.index}.bin"
+                )
+                result = chunk_uploader.upload_bytes(chunk_key, chunk.data)
+                chunks.append(
+                    ChunkEntry(
+                        key=chunk_key,
+                        size=chunk.size,
+                        sha256=chunk.sha256,
+                        etag=result.etag,
+                    )
+                )
+                local_chunks.append(
+                    {
+                        "index": chunk.index,
+                        "key": chunk_key,
+                        "sha256": chunk.sha256,
+                    }
+                )
+                total_bytes += chunk.size
+        finally:
+            stream.stdout.close()
+            _stdout, stderr = stream.process.communicate()
+            if stream.process.returncode != 0:
+                error = stderr.decode("utf-8", errors="replace").strip()
+                logger.error(
+                    "event=btrfs_send_failed subvolume=%s error=%s",
+                    subvol_name,
+                    error,
+                )
+                return 1
+
+        manifest_key = (
+            f"{prefix}subvol/{subvol_name}/{effective_kind}/"
+            f"manifest-{timestamp}.json"
+        )
+        current_key = f"{prefix}subvol/{subvol_name}/current.json"
+        manifest = Manifest(
+            version=1,
+            subvolume=subvol_name,
+            kind=effective_kind,
+            created_at=timestamp,
+            snapshot=SnapshotInfo(
+                name=snapshot.name,
+                path=str(snapshot.path),
+                uuid=None,
+                parent_uuid=None,
+            ),
+            parent_manifest=parent_manifest if effective_kind == "incremental" else None,
+            chunks=tuple(chunks),
+            total_bytes=total_bytes,
+            chunk_size=config.s3.chunk_size_bytes,
+            s3={"storage_class": config.s3.storage_class_chunks},
+        )
+        pointer = CurrentPointer(
+            manifest_key=manifest_key,
+            kind=effective_kind,
+            created_at=timestamp,
+        )
+        publish_manifest(
+            client,
+            bucket=config.s3.bucket,
+            manifest_key=manifest_key,
+            current_key=current_key,
+            manifest=manifest,
+            pointer=pointer,
+            storage_class=config.s3.storage_class_manifest,
+            sse=config.s3.sse,
+        )
+        logger.info(
+            "event=backup_uploaded subvolume=%s manifest_key=%s chunk_count=%d",
+            subvol_name,
+            manifest_key,
+            len(chunks),
+        )
+
+        if write_manifest and subvolume_path == selected[0]:
+            os.makedirs(run_dir, exist_ok=True)
+            manifest_path = os.path.join(run_dir, "manifest.json")
+            local_manifest = {
+                "backup_type": backup_type,
+                "chunks": local_chunks,
+            }
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(local_manifest, handle, indent=2, sort_keys=True)
+            logger.info("event=manifest_written path=%s", manifest_path)
+
+        state_subvols[subvol_name] = SubvolumeState(
+            last_snapshot=str(snapshot.path),
+            last_manifest=manifest_key,
+            last_full_at=timestamp
+            if effective_kind == "full"
+            else subvol_state.last_full_at,
+        )
+        snapshot_manager.prune_snapshots(
+            subvol_name,
+            config.snapshots.retain,
+            keep_name=parent_snapshot.name if parent_snapshot else None,
+        )
+
+    save_state(
+        config.global_cfg.state_path,
+        State(subvolumes=state_subvols, last_run_at=timestamp),
+    )
+
     return 0
+
+
+class _ShellRunner:
+    def run(self, args: list[str]) -> None:
+        env = os.environ.copy()
+        env["PATH"] = _ensure_sbin_on_path(env.get("PATH", ""))
+        subprocess.run(
+            args,
+            check=True,
+            text=True,
+            capture_output=True,
+            env=env,
+        )
 
 
 def _has_aws_credentials() -> bool:
@@ -239,6 +387,14 @@ def _parse_level(value: str) -> int:
     if normalized not in mapping:
         raise ConfigError(f"invalid log level: {value}")
     return mapping[normalized]
+
+
+def _ensure_sbin_on_path(path: str) -> str:
+    parts = [entry for entry in path.split(os.pathsep) if entry]
+    for entry in ("/usr/sbin", "/sbin"):
+        if entry not in parts:
+            parts.append(entry)
+    return os.pathsep.join(parts)
 
 
 def run_restore(args: argparse.Namespace, config: Config) -> int:

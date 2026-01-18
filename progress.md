@@ -32,4 +32,5 @@
 - Next: implement Task 12 restore verification and Task 13 integration harness with restore + multi-chunk.
 - 2026-01-17 16:31 MST: Completed Task 11 restore core with manifest resolution and restore tests; commit "Implement restore core".
 - 2026-01-17 16:38 MST: Completed Task 12 restore verification; commit "Add restore verification".
-- 2026-01-17 16:46 MST: Blocked on Task 13 integration harness (losetup permissions); commit "Record Task 13 harness block".
+- 2026-01-17 16:49 MST: Blocked on Task 13 harness run (setup_btrfs losetup permission failure); commit "Record Task 13 harness block".
+- 2026-01-17 17:09 MST: Completed Task 13 integration harness (restore + multi-chunk); commit "Complete Task 13 harness run".

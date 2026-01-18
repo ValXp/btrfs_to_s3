@@ -21,7 +21,7 @@ from harness.runner import run_tool
 DEFAULT_CONFIG = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, "config", "test.toml")
 )
-DEFAULT_MANIFEST_KEY = "current.json"
+DEFAULT_MANIFEST_KEY = None
 
 
 def main() -> int:
@@ -99,18 +99,19 @@ def _resolve_subvolume(requested: str | None, config: dict) -> str:
 
 def _resolve_target_path(args, paths: dict[str, str], subvolume: str) -> str:
     run_dir = os.path.abspath(paths["run_dir"])
+    mount_dir = os.path.abspath(paths["mount_dir"])
     if args.target:
         target = os.path.abspath(args.target)
-        _ensure_under_root(run_dir, target)
+        _ensure_under_root(mount_dir, target)
     else:
         target_base = args.target_base
         if target_base is None:
-            target_base = os.path.join(run_dir, "restore")
+            target_base = os.path.join(mount_dir, "restore")
         target_base = os.path.abspath(target_base)
-        _ensure_under_root(run_dir, target_base)
+        _ensure_under_root(mount_dir, target_base)
         target_name = args.target_name or _default_target_name(subvolume)
         target = os.path.join(target_base, target_name)
-        _ensure_under_root(run_dir, target)
+        _ensure_under_root(mount_dir, target)
 
     if os.path.exists(target):
         raise ValueError(f"target path already exists: {target}")

@@ -114,6 +114,17 @@ def _write_text(path: str, content: str) -> None:
         handle.write(content)
 
 
+def _write_binary(path: str, size: int, byte_value: int) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    chunk = bytes([byte_value]) * 4096
+    remaining = size
+    with open(path, "wb") as handle:
+        while remaining > 0:
+            write_size = min(remaining, len(chunk))
+            handle.write(chunk[:write_size])
+            remaining -= write_size
+
+
 def _ensure_under_root(root: str, path: str) -> str:
     root = os.path.abspath(root)
     path = os.path.abspath(path)

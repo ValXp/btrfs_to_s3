@@ -10,7 +10,7 @@ lock_dir = "testing/run/large/lock"
 btrfs_image = "testing/run/large/btrfs.img"
 mount_dir = "testing/run/large/mnt"
 data_dir = "testing/run/large/mnt/data"
-snapshots_dir = "testing/run/large/snapshots"
+snapshots_dir = "testing/run/large/mnt/snapshots"
 
 [btrfs]
 loopback_size_gib = 4

@@ -218,7 +218,18 @@ def restore_chain(
                 restore_tier=restore_tier,
                 timeout_seconds=restore_timeout_seconds,
             )
-        _apply_manifest_stream(client, bucket, manifest, target)
+        created = _apply_manifest_stream(
+            client, bucket, manifest, target.parent
+        )
+        if created != target:
+            if created.exists():
+                if target.exists():
+                    _delete_subvolume(target)
+                os.rename(created, target)
+            else:
+                raise RestoreError(f"received subvolume missing: {created}")
+    if target.exists():
+        _set_subvolume_writable(target)
 
 
 def verify_metadata(
@@ -323,10 +334,14 @@ def _apply_manifest_stream(
     client,
     bucket: str,
     manifest: ManifestInfo,
-    target: Path,
-) -> None:
+    receive_dir: Path,
+) -> Path:
+    snapshot_path = manifest.snapshot_path
+    if not snapshot_path:
+        raise RestoreError(f"{manifest.key} missing snapshot path")
+    subvol_name = Path(snapshot_path).name
     proc = subprocess.Popen(
-        ["btrfs", "receive", str(target)],
+        ["btrfs", "receive", str(receive_dir)],
         stdin=subprocess.PIPE,
     )
     assert proc.stdin is not None
@@ -337,6 +352,7 @@ def _apply_manifest_stream(
     code = proc.wait()
     if code != 0:
         raise RestoreError(f"btrfs receive failed with exit code {code}")
+    return receive_dir / subvol_name
 
 
 def _fetch_json(client, bucket: str, key: str) -> dict[str, Any]:
@@ -419,6 +435,38 @@ def _entry_type(path: Path) -> str:
     if stat.S_ISDIR(mode):
         return "dir"
     return "other"
+
+
+def _delete_subvolume(path: Path) -> None:
+    env = os.environ.copy()
+    env["PATH"] = _ensure_sbin_on_path(env.get("PATH", ""))
+    subprocess.run(
+        ["btrfs", "subvolume", "delete", str(path)],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+
+def _set_subvolume_writable(path: Path) -> None:
+    env = os.environ.copy()
+    env["PATH"] = _ensure_sbin_on_path(env.get("PATH", ""))
+    subprocess.run(
+        ["btrfs", "property", "set", "-f", "-ts", str(path), "ro", "false"],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+
+def _ensure_sbin_on_path(path: str) -> str:
+    parts = [entry for entry in path.split(os.pathsep) if entry]
+    for entry in ("/usr/sbin", "/sbin"):
+        if entry not in parts:
+            parts.append(entry)
+    return os.pathsep.join(parts)
 
 
 def _select_sample(paths: list[str], sample_max_files: int) -> list[str]:
