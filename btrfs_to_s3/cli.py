@@ -202,11 +202,17 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
         for subvolume_path, plan_item, action in work_items:
             subvol_name = subvolume_path.name
             subvol_state = state_subvols.get(subvol_name, SubvolumeState())
-            parent_snapshot = (
-                Path(plan_item.parent_snapshot)
-                if plan_item.parent_snapshot
-                else None
-            )
+            parent_snapshot = None
+            if action == "inc" and plan_item.parent_snapshot:
+                parent_snapshot = Path(plan_item.parent_snapshot)
+                if not parent_snapshot.exists():
+                    logger.info(
+                        "event=backup_parent_missing subvolume=%s path=%s",
+                        subvol_name,
+                        parent_snapshot,
+                    )
+                    action = "full"
+                    parent_snapshot = None
             parent_manifest = (
                 subvol_state.last_manifest if action == "inc" else None
             )
