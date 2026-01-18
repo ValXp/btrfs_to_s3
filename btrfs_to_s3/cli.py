@@ -29,6 +29,7 @@ from btrfs_to_s3.restore import (
 )
 from btrfs_to_s3.snapshots import SnapshotManager
 from btrfs_to_s3.chunker import chunk_stream
+from btrfs_to_s3.planner import PlanItem, plan_backups
 from btrfs_to_s3.streamer import open_btrfs_send
 from btrfs_to_s3.state import State, SubvolumeState, load_state, save_state
 from btrfs_to_s3.uploader import MAX_PART_SIZE, S3Uploader
@@ -136,12 +137,8 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
         logger.info("event=backup_dry_run status=skipped")
         return 0
 
-    backup_type = os.environ.get("BTRFS_TO_S3_BACKUP_TYPE", "full")
-    if backup_type not in ("full", "incremental"):
-        backup_type = "full"
-
-    snapshot_kind = "full" if backup_type == "full" else "inc"
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    now = datetime.now(timezone.utc)
+    timestamp = now.strftime("%Y%m%dT%H%M%SZ")
     prefix = config.s3.prefix.rstrip("/")
     if prefix:
         prefix = prefix + "/"
@@ -164,6 +161,18 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
         logger.error("event=backup_no_subvolumes status=failed")
         return 2
 
+    snapshot_manager = SnapshotManager(
+        config.snapshots.base_dir,
+        _ShellRunner(),
+    )
+
+    plan_items = _build_plan(config, state, now, snapshot_manager, selected)
+    plan_by_name = {item.subvolume: item for item in plan_items}
+    work_items = _filter_plan_items(plan_by_name, selected, args.once, logger)
+    if not work_items:
+        logger.info("event=backup_not_due status=skipped")
+        return 0
+
     if args.no_s3 or not _has_aws_credentials():
         logger.info("event=backup_no_s3 status=skipped")
         return 0
@@ -177,26 +186,19 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
         part_size=min(config.s3.chunk_size_bytes, MAX_PART_SIZE),
     )
 
-    snapshot_manager = SnapshotManager(
-        config.snapshots.base_dir,
-        _ShellRunner(),
-    )
-
-    for subvolume_path in selected:
+    for subvolume_path, plan_item, action in work_items:
         subvol_name = subvolume_path.name
         subvol_state = state_subvols.get(subvol_name, SubvolumeState())
         parent_snapshot = (
-            Path(subvol_state.last_snapshot)
-            if subvol_state.last_snapshot
+            Path(plan_item.parent_snapshot)
+            if plan_item.parent_snapshot
             else None
         )
-        parent_manifest = subvol_state.last_manifest
-        effective_kind = backup_type
-        effective_snapshot_kind = snapshot_kind
-        if backup_type == "incremental" and parent_snapshot is None:
-            effective_kind = "full"
-            effective_snapshot_kind = "full"
-            parent_manifest = None
+        parent_manifest = (
+            subvol_state.last_manifest if action == "inc" else None
+        )
+        effective_kind = "full" if action == "full" else "incremental"
+        effective_snapshot_kind = "full" if action == "full" else "inc"
 
         snapshot = snapshot_manager.create_snapshot(
             subvolume_path, subvol_name, effective_snapshot_kind
@@ -326,6 +328,58 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
     )
 
     return 0
+
+
+def _build_plan(
+    config: Config,
+    state: State,
+    now: datetime,
+    snapshot_manager: SnapshotManager,
+    selected: list[Path],
+) -> list[PlanItem]:
+    available_snapshots: set[str] = set()
+    for path in selected:
+        for snapshot in snapshot_manager.list_snapshots(path.name):
+            available_snapshots.add(snapshot.name)
+    if len(selected) == len(config.subvolumes.paths):
+        plan_config = config
+    else:
+        plan_config = Config(
+            global_cfg=config.global_cfg,
+            schedule=config.schedule,
+            snapshots=config.snapshots,
+            subvolumes=type(config.subvolumes)(paths=tuple(selected)),
+            s3=config.s3,
+            restore=config.restore,
+        )
+    return plan_backups(
+        plan_config, state, now, available_snapshots=available_snapshots
+    )
+
+
+def _filter_plan_items(
+    plan_by_name: dict[str, PlanItem],
+    selected: list[Path],
+    force_run: bool,
+    logger: logging.Logger,
+) -> list[tuple[Path, PlanItem, str]]:
+    work_items: list[tuple[Path, PlanItem, str]] = []
+    for path in selected:
+        plan = plan_by_name.get(path.name)
+        if plan is None:
+            continue
+        action = plan.action
+        if action == "skip" and force_run:
+            action = "inc" if plan.parent_snapshot else "full"
+        if action == "skip":
+            logger.info(
+                "event=backup_not_due subvolume=%s reason=%s",
+                plan.subvolume,
+                plan.reason,
+            )
+            continue
+        work_items.append((path, plan, action))
+    return work_items
 
 
 class _ShellRunner:

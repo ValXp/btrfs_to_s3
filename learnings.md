@@ -22,3 +22,4 @@ Learnings
 
 - FYI: chunk_stream now requires consumers to fully read each chunk before requesting the next (RuntimeError otherwise) to keep stream boundaries intact.
 - FYI: restore chunk download now streams with configurable read_size for tests.
+- FYI: planner now normalizes snapshot paths to basenames when checking availability/timestamps.

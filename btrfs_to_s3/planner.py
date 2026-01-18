@@ -28,7 +28,11 @@ def plan_backups(
 ) -> list[PlanItem]:
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
-    available = set(available_snapshots) if available_snapshots is not None else None
+    available = (
+        {_snapshot_basename(name) for name in available_snapshots}
+        if available_snapshots is not None
+        else None
+    )
     plans: list[PlanItem] = []
     for subvolume_path in config.subvolumes.paths:
         name = _subvolume_name(subvolume_path)
@@ -73,7 +77,8 @@ def _plan_subvolume(
             parent_snapshot=None,
             reason="missing_parent",
         )
-    if available_snapshots is not None and last_snapshot not in available_snapshots:
+    last_snapshot_name = _snapshot_basename(last_snapshot)
+    if available_snapshots is not None and last_snapshot_name not in available_snapshots:
         return PlanItem(
             subvolume=name,
             action="full",
@@ -81,7 +86,7 @@ def _plan_subvolume(
             reason="missing_parent",
         )
 
-    last_snapshot_at = _parse_snapshot_timestamp(last_snapshot)
+    last_snapshot_at = _parse_snapshot_timestamp(last_snapshot_name)
     if last_snapshot_at is None:
         return PlanItem(
             subvolume=name,
@@ -126,3 +131,7 @@ def _parse_snapshot_timestamp(name: str) -> datetime | None:
     if parsed is None:
         return None
     return parsed[1]
+
+
+def _snapshot_basename(value: str) -> str:
+    return Path(value).name
