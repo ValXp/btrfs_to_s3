@@ -71,3 +71,19 @@
   - Concurrency setting is honored and improves throughput.
   - Spool path and size limits are respected when enabled.
   - Unit tests cover concurrency configuration and spool behavior.
+
+### Task 8: Lock stale PID handling for crash recovery
+- Scope: `btrfs_to_s3/lock.py`, `btrfs_to_s3/cli.py`.
+- Detect stale lock files and recover safely after crashes.
+- Acceptance criteria:
+  - Lock acquisition checks whether recorded PID is still running.
+  - Stale lock files are removed automatically so reruns succeed.
+  - Unit tests cover stale lock detection and recovery.
+
+### Task 9: Incremental manifest parent validation
+- Scope: `btrfs_to_s3/planner.py`, `btrfs_to_s3/cli.py`.
+- Ensure incrementals are only planned/executed when a valid parent manifest is available.
+- Acceptance criteria:
+  - Missing `last_manifest` forces a full backup (not an incremental).
+  - Manifest chains always resolve to a full backup.
+  - Unit tests cover missing parent manifest fallback.

@@ -43,3 +43,4 @@
 - 2026-01-17 17:42 MST: Completed Task 5 missing parent fallback; commit "Fallback to full when parent missing".
 - 2026-01-17 17:43 MST: Completed Task 6 restore verification without local snapshot; commit "Allow restore verification without source".
 - 2026-01-17 17:51 MST: Completed Task 7 upload concurrency and spooling; commit "Add upload concurrency and spooling".
+- 2026-01-17 18:02 MST: Added Task 8 (stale lock recovery) and Task 9 (incremental manifest parent validation) to address high-priority review findings.
