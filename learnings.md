@@ -1,11 +1,11 @@
 Learnings
-- FYI: `testing/config/test.env` is a tracked template even though `testing/.gitignore` ignores it, so edit with care to avoid committing secrets.
-- FYI: `testing/harness/env.py` only accepts `KEY=VALUE` lines (optional `export`) and will raise on invalid entries; inline comments are treated as part of the value.
+- FYI: `integration_tests/config/test.env` is a tracked template even though `integration_tests/.gitignore` ignores it, so edit with care to avoid committing secrets.
+- FYI: `integration_tests/harness/env.py` only accepts `KEY=VALUE` lines (optional `export`) and will raise on invalid entries; inline comments are treated as part of the value.
 - FYI: `python` is not available in the current shell; use `python3` when running harness commands.
 - FYI: `rg` is not installed in this environment; use `find`/`grep` as fallback.
 - FYI: `pytest` is not available in this environment, so a minimal local `pytest` shim runs `unittest` discovery for `python3 -m pytest`.
-- FYI: `testing/scripts/setup_btrfs.py` currently fails because `losetup` is missing in the environment.
-- FYI: The harness now generates a tool config at testing/run/tool_config.toml and exports BTRFS_TO_S3_HARNESS_RUN_DIR when running the CLI.
+- FYI: `integration_tests/scripts/setup_btrfs.py` currently fails because `losetup` is missing in the environment.
+- FYI: The harness now generates a tool config at integration_tests/run/tool_config.toml and exports BTRFS_TO_S3_HARNESS_RUN_DIR when running the CLI.
 - FYI: AWS uploads require credentials; this environment needed python3-boto3 installed via apt (pip is blocked by PEP 668).
 - FYI: The integration harness requires sudo for loopback/mount operations (run with sudo -n when possible).
 - FYI: Config now includes a restore section; direct Config construction must supply RestoreConfig.
@@ -14,11 +14,11 @@ Learnings
 - FYI: Current chunking/restore code buffers full chunks; large defaults will OOM unless streaming is used.
 - FYI: Task 13 harness run failed during setup because losetup returned a non-zero exit status (loop device permissions).
 - FYI: Task 13 harness run still requires sudo for losetup; non-interactive sudo is unavailable (password required).
-- FYI: The latest `python3 testing/scripts/run_all.py --config testing/config/test.toml` attempt failed in `setup_btrfs.py` at `losetup --find --show` due to insufficient permissions.
-- FYI: `python3 testing/scripts/run_all.py --config testing/config/test.toml --include-large` still fails at `losetup --find --show` in `setup_btrfs.py` due to insufficient permissions.
+- FYI: The latest `python3 integration_tests/scripts/run_all.py --config integration_tests/config/test.toml` attempt failed in `setup_btrfs.py` at `losetup --find --show` due to insufficient permissions.
+- FYI: `python3 integration_tests/scripts/run_all.py --config integration_tests/config/test.toml --include-large` still fails at `losetup --find --show` in `setup_btrfs.py` due to insufficient permissions.
 - FYI: The harness snapshots_dir must live under the Btrfs mount (e.g., mount_dir/snapshots) for btrfs subvolume snapshot to succeed.
 - FYI: 'btrfs property set -ts <path> ro false' fails for received subvolumes unless you pass -f to clear received_uuid.
-- FYI: testing/scripts/mutate_data.py needed a local _write_binary helper (mirrors seed_data).
+- FYI: integration_tests/scripts/mutate_data.py needed a local _write_binary helper (mirrors seed_data).
 
 - FYI: chunk_stream now requires consumers to fully read each chunk before requesting the next (RuntimeError otherwise) to keep stream boundaries intact.
 - FYI: restore chunk download now streams with configurable read_size for tests.

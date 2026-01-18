@@ -9,7 +9,7 @@ Progress
 - 2026-01-16 21:35 - done - Add verification and benchmark scripts
 - 2026-01-16 21:37 - done - Add orchestration and cleanup scripts
 - 2026-01-16 21:38 - done - Add stop marker
-- 2026-01-16 22:40 - done - Chown testing/run to SUDO_USER during setup
+- 2026-01-16 22:40 - done - Chown integration_tests/run to SUDO_USER during setup
 - 2026-01-17 15:10 - done - Restore and multi-chunk test design added to harness docs/tasks
 - Next: implement Task 11 (multi-chunk scenario) and Task 12 (orchestration extensions)
 - 2026-01-17 16:11 - done - Add restore run and verification scripts

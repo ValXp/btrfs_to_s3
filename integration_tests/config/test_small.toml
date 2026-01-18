@@ -3,14 +3,14 @@ cmd = ["python3", "-m", "btrfs_to_s3"]
 config_flag = "--config"
 
 [paths]
-run_dir = "testing/run/small"
-logs_dir = "testing/run/small/logs"
-scratch_dir = "testing/run/small/scratch"
-lock_dir = "testing/run/small/lock"
-btrfs_image = "testing/run/small/btrfs.img"
-mount_dir = "testing/run/small/mnt"
-data_dir = "testing/run/small/mnt/data"
-snapshots_dir = "testing/run/small/mnt/snapshots"
+run_dir = "integration_tests/run/small"
+logs_dir = "integration_tests/run/small/logs"
+scratch_dir = "integration_tests/run/small/scratch"
+lock_dir = "integration_tests/run/small/lock"
+btrfs_image = "integration_tests/run/small/btrfs.img"
+mount_dir = "integration_tests/run/small/mnt"
+data_dir = "integration_tests/run/small/mnt/data"
+snapshots_dir = "integration_tests/run/small/mnt/snapshots"
 
 [btrfs]
 loopback_size_gib = 4
