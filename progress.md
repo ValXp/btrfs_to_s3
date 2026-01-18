@@ -39,3 +39,4 @@
 - 2026-01-17 17:28 MST: Completed Task 1 streamed chunking + multipart limits; commit "Stream chunks and cap multipart parts".
 - 2026-01-17 17:31 MST: Completed Task 2 restore streaming; commit "Stream restore downloads".
 - 2026-01-17 17:36 MST: Completed Task 3 planner + schedule integration; commit "Integrate planner with CLI schedule".
+- 2026-01-17 17:39 MST: Completed Task 4 lock during backups; commit "Lock backups in CLI".
