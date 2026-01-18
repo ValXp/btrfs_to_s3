@@ -218,6 +218,13 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
                     )
                     action = "full"
                     parent_snapshot = None
+            if action == "inc" and not subvol_state.last_manifest:
+                logger.info(
+                    "event=backup_parent_manifest_missing subvolume=%s",
+                    subvol_name,
+                )
+                action = "full"
+                parent_snapshot = None
             parent_manifest = (
                 subvol_state.last_manifest if action == "inc" else None
             )

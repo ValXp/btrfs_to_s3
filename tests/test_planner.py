@@ -76,6 +76,7 @@ class PlannerTests(unittest.TestCase):
                 "data": SubvolumeState(
                     last_full_at="2025-12-15T00:00:00Z",
                     last_snapshot="data__20260101T000000Z__inc",
+                    last_manifest="backup/data/subvol/data/incremental/manifest-20260101T000000Z.json",
                 )
             }
         )
@@ -103,6 +104,26 @@ class PlannerTests(unittest.TestCase):
         plan = plan_backups(config, state, now, available_snapshots=set())
         self.assertEqual(plan[0].action, "full")
 
+    def test_missing_manifest_falls_back_to_full(self) -> None:
+        config = make_config()
+        state = State(
+            subvolumes={
+                "data": SubvolumeState(
+                    last_full_at="2025-12-15T00:00:00Z",
+                    last_snapshot="data__20260101T000000Z__inc",
+                    last_manifest=None,
+                )
+            }
+        )
+        now = datetime(2026, 1, 10, tzinfo=timezone.utc)
+        plan = plan_backups(
+            config,
+            state,
+            now,
+            available_snapshots={"data__20260101T000000Z__inc"},
+        )
+        self.assertEqual(plan[0].action, "full")
+
     def test_incremental_not_due_skips(self) -> None:
         config = make_config()
         state = State(
@@ -110,6 +131,7 @@ class PlannerTests(unittest.TestCase):
                 "data": SubvolumeState(
                     last_full_at="2025-12-15T00:00:00Z",
                     last_snapshot="data__20260105T000000Z__inc",
+                    last_manifest="backup/data/subvol/data/incremental/manifest-20260105T000000Z.json",
                 )
             }
         )

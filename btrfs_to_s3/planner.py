@@ -77,6 +77,14 @@ def _plan_subvolume(
             parent_snapshot=None,
             reason="missing_parent",
         )
+    last_manifest = sub_state.last_manifest if sub_state else None
+    if not last_manifest:
+        return PlanItem(
+            subvolume=name,
+            action="full",
+            parent_snapshot=None,
+            reason="missing_manifest",
+        )
     last_snapshot_name = _snapshot_basename(last_snapshot)
     if available_snapshots is not None and last_snapshot_name not in available_snapshots:
         return PlanItem(

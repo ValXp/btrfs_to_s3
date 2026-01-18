@@ -29,6 +29,15 @@ class LockTests(unittest.TestCase):
             lock.release()
             self.assertFalse(lock_path.exists())
 
+    def test_stale_lock_is_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "btrfs_to_s3.lock"
+            lock_path.write_text("999999")
+            lock = LockFile(lock_path)
+            lock.acquire()
+            self.assertEqual(str(os.getpid()), lock_path.read_text())
+            lock.release()
+
 
 if __name__ == "__main__":
     unittest.main()

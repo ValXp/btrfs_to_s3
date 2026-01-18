@@ -210,3 +210,135 @@ Acceptance criteria
 - `run_all.py` includes restore + verify by default.
 - `run_all.py --include-large` (or equivalent) runs the multi-chunk scenario.
 - Documentation references `testing/config/test_large.toml`.
+
+Task 13: Force Incremental Runs (Agent L)
+Summary
+Ensure the harness actually triggers incrementals instead of skipping due to schedule.
+
+Required changes
+- Update `testing/scripts/run_incremental.py` to pass `--once` to the CLI to force a run even if the planner says “not due”.
+- Remove reliance on `BTRFS_TO_S3_BACKUP_TYPE` (currently ignored by the CLI).
+- Optionally add a log line stating the incremental run is forced.
+
+Acceptance criteria
+- Running `python testing/scripts/run_incremental.py --config testing/config/test.toml` produces an incremental manifest (not skipped).
+- Logs show the CLI was invoked with `backup --once`.
+
+Task 14: Cover All Subvolumes (Agent M)
+Summary
+Make the harness test backups for all configured subvolumes, not just the first.
+
+Required changes
+- Adjust harness behavior so the CLI runs all subvolumes even when `BTRFS_TO_S3_HARNESS_RUN_DIR` is set.
+- Update `testing/scripts/run_full.py` and `testing/scripts/run_incremental.py` to run per-subvolume if needed (e.g., call `backup --subvolume <name>` per subvolume).
+
+Acceptance criteria
+- The harness produces manifests and S3 objects for each subvolume listed in `testing/config/test.toml`.
+- `testing/scripts/verify_s3.py` or a new check confirms all subvolumes were backed up.
+
+Task 15: Validate Real Manifest and Current Pointer (Agent N)
+Summary
+Validate the actual S3 manifest schema and the `current.json` pointer contents, not only the simplified local manifest.
+
+Required changes
+- Extend `testing/harness/manifest.py` to validate the real manifest schema in `btrfs_to_s3/manifest.py` (fields like `version`, `subvolume`, `kind`, `snapshot`, `chunks`, `total_bytes`, `chunk_size`, `s3`).
+- Add a new schema file under `testing/expected/manifest_schema_full.json` and use it for S3 manifest validation.
+- Add validation for `current.json` fields (`manifest_key`, `kind`, `created_at`).
+- Update `testing/scripts/verify_manifest.py` to download the S3 manifest and `current.json`, validate both, and keep the existing local manifest checks.
+
+Acceptance criteria
+- `verify_manifest.py` fails if any required manifest or current pointer field is missing or malformed.
+- Validation checks the real S3 manifest contents, not just the local `testing/run/manifest.json`.
+
+Task 16: S3 Layout + Metadata Checks (Agent O)
+Summary
+Verify object layout, per-chunk metadata, and manifest vs chunk storage classes.
+
+Required changes
+- Extend `testing/scripts/verify_s3.py` to:
+  - Confirm object keys follow the expected layout (`subvol/<name>/(full|incremental)/...`).
+  - Validate that chunk objects use `s3.storage_class_chunks` and manifests/current pointers use `s3.storage_class_manifest`.
+  - Verify chunk objects referenced in the manifest exist and match size.
+- Add helper functions in `testing/harness/aws.py` if needed (e.g., list keys by suffix or prefix).
+
+Acceptance criteria
+- `verify_s3.py` fails on missing chunk objects, bad key layout, or storage class mismatch.
+- Manifests and current pointers are checked separately from chunks for storage class.
+
+Task 17: Incremental Chain Restore Coverage (Agent P)
+Summary
+Exercise restore flows using explicit manifest keys and chained incrementals.
+
+Required changes
+- Extend `testing/scripts/run_restore.py` to accept `--manifest-key` and add a new mode to restore a full+incremental chain (using an incremental manifest key).
+- Update `testing/scripts/run_all.py` to run at least one restore using `--manifest-key`.
+- Add a check to ensure the restore uses the full chain when given an incremental manifest.
+
+Acceptance criteria
+- At least one restore run uses `--manifest-key` and completes successfully.
+- Logs show that the restore resolved parent manifests (chain) rather than only a full.
+
+Task 18: Archive Restore Behavior (Agent Q)
+Summary
+Test restore wait/timeout handling for archival storage classes.
+
+Required changes
+- Add a harness config variant (e.g., `testing/config/test_archive.toml`) that uses an archival class (e.g., `GLACIER` or `DEEP_ARCHIVE`) and sets `restore.wait_for_restore`/timeout settings.
+- Add a script `testing/scripts/run_restore_archive.py` to run a restore with both `--wait-restore` and `--no-wait-restore` options.
+- Document any required AWS permissions or delays in `testing/README.md`.
+
+Acceptance criteria
+- The script logs both paths (wait vs no-wait) and exits non-zero on timeout or improper handling.
+- The harness can be run in non-archive mode without changes.
+
+Task 19: CLI Flag Coverage (Agent R)
+Summary
+Exercise CLI flags and config branches currently untested.
+
+Required changes
+- Add `testing/scripts/run_cli_flags.py` that calls the CLI with:
+  - `backup --dry-run`
+  - `backup --no-s3`
+  - `backup --subvolume <name>`
+  - `backup --once`
+  - `restore --verify none|sample|full` (choose at least one non-default)
+- Ensure each invocation is logged and validated for expected behavior.
+
+Acceptance criteria
+- Script exits non-zero on any unexpected CLI failure.
+- Logs show each flag path was exercised.
+
+Task 20: Lock Contention Test (Agent S)
+Summary
+Verify the lock prevents overlapping runs.
+
+Required changes
+- Add `testing/scripts/run_lock_contention.py` that starts one `backup` process, then quickly starts a second and verifies the second fails with a lock error.
+- Add a harness helper to parse stderr/stdout for the lock failure signal if needed.
+
+Acceptance criteria
+- The second run fails with a lock error, and the script exits 0 only if contention is handled as expected.
+
+Task 21: Spool Configuration Coverage (Agent T)
+Summary
+Test `s3.spool_enabled` and spool size constraints.
+
+Required changes
+- Add `testing/config/test_spool.toml` with `s3.spool_enabled = true` and a small `global.spool_size_bytes`.
+- Add `testing/scripts/run_spool.py` to run a backup using this config and verify it completes (or fails deterministically if the spool size is too small).
+
+Acceptance criteria
+- The script clearly documents expected behavior (pass or fail) and enforces it.
+- Logs show spool settings were in effect.
+
+Task 22: Multi-Subvolume Restore Verification (Agent U)
+Summary
+Verify restore correctness across all subvolumes, not only the first.
+
+Required changes
+- Update `testing/scripts/verify_restore.py` to accept `--subvolume all` and iterate over all configured subvolumes.
+- Update `testing/scripts/run_restore.py` to optionally restore all subvolumes into separate targets under a base dir.
+
+Acceptance criteria
+- A single command can restore and verify all subvolumes.
+- Failure in any subvolume causes non-zero exit with a clear error.
