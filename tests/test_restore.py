@@ -261,6 +261,26 @@ class RestoreVerifyTests(unittest.TestCase):
         sample = restore._select_sample(["b", "a", "c"], 2)
         self.assertEqual(sample, ["a", "b"])
 
+    def test_verify_restore_missing_source_skips_content(self) -> None:
+        with tempfile.TemporaryDirectory() as target_dir:
+            target_path = Path(target_dir)
+
+            def runner(*args, **kwargs):
+                return subprocess.CompletedProcess(
+                    args[0],
+                    0,
+                    stdout="UUID: 11111111-2222-3333-4444-555555555555\n",
+                    stderr="",
+                )
+
+            restore.verify_restore(
+                Path("/missing/source"),
+                target_path,
+                mode="full",
+                sample_max_files=10,
+                runner=runner,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

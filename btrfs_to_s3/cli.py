@@ -534,12 +534,17 @@ def run_restore(args: argparse.Namespace, config: Config) -> int:
         logger.info("event=restore_verify_skipped mode=none")
     else:
         snapshot_path = manifests[-1].snapshot_path if manifests else None
-        if not snapshot_path:
-            logger.error("event=restore_verify_failed error=missing_snapshot")
-            return 1
+        source_path = (
+            Path(snapshot_path).expanduser() if snapshot_path else None
+        )
+        if source_path is None or not source_path.exists():
+            logger.info(
+                "event=restore_verify_source_missing path=%s",
+                snapshot_path or "unknown",
+            )
         try:
             verify_restore(
-                Path(snapshot_path),
+                source_path,
                 Path(args.target).expanduser(),
                 mode=verify_mode,
                 sample_max_files=config.restore.sample_max_files,

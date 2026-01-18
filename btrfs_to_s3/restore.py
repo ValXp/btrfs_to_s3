@@ -322,7 +322,7 @@ def verify_content(
 
 
 def verify_restore(
-    source: Path,
+    source: Path | None,
     target: Path,
     *,
     mode: str,
@@ -332,6 +332,8 @@ def verify_restore(
     if mode == "none":
         return
     verify_metadata(target, runner=runner)
+    if source is None or not source.exists():
+        return
     verify_content(
         source,
         target,
