@@ -19,6 +19,7 @@ from btrfs_to_s3.config import (
     SnapshotsConfig,
     SubvolumesConfig,
 )
+from btrfs_to_s3.lock import LockError
 from btrfs_to_s3.planner import PlanItem
 
 CONFIG_TOML = """
@@ -188,6 +189,67 @@ class CliTests(unittest.TestCase):
                 result = cli.run_backup(args, config)
             self.assertEqual(result, 0)
             self.assertTrue(creds_check.called)
+
+    def test_backup_lock_contention_returns_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self._make_config(temp_dir)
+            args = cli.parse_args(
+                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            )
+            args.dry_run = False
+            args.no_s3 = False
+            args.once = False
+            args.subvolume = None
+
+            class FakeLock:
+                def __init__(self, path: Path) -> None:
+                    self.path = path
+
+                def acquire(self):
+                    raise LockError("locked")
+
+            with mock.patch("btrfs_to_s3.cli.LockFile", FakeLock):
+                result = cli.run_backup(args, config)
+            self.assertEqual(result, 1)
+
+    def test_backup_releases_lock_on_skip(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self._make_config(temp_dir)
+            args = cli.parse_args(
+                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            )
+            args.dry_run = False
+            args.no_s3 = False
+            args.once = False
+            args.subvolume = None
+            plan = [
+                PlanItem(
+                    subvolume="data",
+                    action="skip",
+                    parent_snapshot="snap",
+                    reason="incremental_not_due",
+                )
+            ]
+            lock_state: dict[str, bool] = {"released": False}
+
+            class FakeLock:
+                def __init__(self, path: Path) -> None:
+                    self.path = path
+
+                def acquire(self):
+                    return self
+
+                def release(self) -> None:
+                    lock_state["released"] = True
+
+            with mock.patch(
+                "btrfs_to_s3.cli.plan_backups", return_value=plan
+            ), mock.patch(
+                "btrfs_to_s3.cli.LockFile", FakeLock
+            ):
+                result = cli.run_backup(args, config)
+            self.assertEqual(result, 0)
+            self.assertTrue(lock_state["released"])
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ from btrfs_to_s3.restore import (
 )
 from btrfs_to_s3.snapshots import SnapshotManager
 from btrfs_to_s3.chunker import chunk_stream
+from btrfs_to_s3.lock import LockError, LockFile
 from btrfs_to_s3.planner import PlanItem, plan_backups
 from btrfs_to_s3.streamer import open_btrfs_send
 from btrfs_to_s3.state import State, SubvolumeState, load_state, save_state
@@ -137,197 +138,215 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
         logger.info("event=backup_dry_run status=skipped")
         return 0
 
-    now = datetime.now(timezone.utc)
-    timestamp = now.strftime("%Y%m%dT%H%M%SZ")
-    prefix = config.s3.prefix.rstrip("/")
-    if prefix:
-        prefix = prefix + "/"
+    lock = LockFile(config.global_cfg.lock_path)
+    try:
+        lock.acquire()
+    except LockError as exc:
+        logger.error("event=backup_lock_failed error=%s", exc)
+        return 1
 
-    run_dir = os.environ.get("BTRFS_TO_S3_HARNESS_RUN_DIR")
-    write_manifest = run_dir is not None
+    try:
+        now = datetime.now(timezone.utc)
+        timestamp = now.strftime("%Y%m%dT%H%M%SZ")
+        prefix = config.s3.prefix.rstrip("/")
+        if prefix:
+            prefix = prefix + "/"
 
-    state = load_state(config.global_cfg.state_path)
-    state_subvols = dict(state.subvolumes)
+        run_dir = os.environ.get("BTRFS_TO_S3_HARNESS_RUN_DIR")
+        write_manifest = run_dir is not None
 
-    subvolume_paths = list(config.subvolumes.paths)
-    if args.subvolume:
-        selected = [
-            path for path in subvolume_paths if path.name in set(args.subvolume)
-        ]
-    else:
-        selected = subvolume_paths[:1] if write_manifest else subvolume_paths
+        state = load_state(config.global_cfg.state_path)
+        state_subvols = dict(state.subvolumes)
 
-    if not selected:
-        logger.error("event=backup_no_subvolumes status=failed")
-        return 2
+        subvolume_paths = list(config.subvolumes.paths)
+        if args.subvolume:
+            selected = [
+                path
+                for path in subvolume_paths
+                if path.name in set(args.subvolume)
+            ]
+        else:
+            selected = subvolume_paths[:1] if write_manifest else subvolume_paths
 
-    snapshot_manager = SnapshotManager(
-        config.snapshots.base_dir,
-        _ShellRunner(),
-    )
+        if not selected:
+            logger.error("event=backup_no_subvolumes status=failed")
+            return 2
 
-    plan_items = _build_plan(config, state, now, snapshot_manager, selected)
-    plan_by_name = {item.subvolume: item for item in plan_items}
-    work_items = _filter_plan_items(plan_by_name, selected, args.once, logger)
-    if not work_items:
-        logger.info("event=backup_not_due status=skipped")
-        return 0
-
-    if args.no_s3 or not _has_aws_credentials():
-        logger.info("event=backup_no_s3 status=skipped")
-        return 0
-
-    client = boto3.client("s3", region_name=config.s3.region)
-    chunk_uploader = S3Uploader(
-        client,
-        bucket=config.s3.bucket,
-        storage_class=config.s3.storage_class_chunks,
-        sse=config.s3.sse,
-        part_size=min(config.s3.chunk_size_bytes, MAX_PART_SIZE),
-    )
-
-    for subvolume_path, plan_item, action in work_items:
-        subvol_name = subvolume_path.name
-        subvol_state = state_subvols.get(subvol_name, SubvolumeState())
-        parent_snapshot = (
-            Path(plan_item.parent_snapshot)
-            if plan_item.parent_snapshot
-            else None
-        )
-        parent_manifest = (
-            subvol_state.last_manifest if action == "inc" else None
-        )
-        effective_kind = "full" if action == "full" else "incremental"
-        effective_snapshot_kind = "full" if action == "full" else "inc"
-
-        snapshot = snapshot_manager.create_snapshot(
-            subvolume_path, subvol_name, effective_snapshot_kind
-        )
-        logger.info(
-            "event=snapshot_created subvolume=%s path=%s kind=%s",
-            subvol_name,
-            snapshot.path,
-            effective_snapshot_kind,
+        snapshot_manager = SnapshotManager(
+            config.snapshots.base_dir,
+            _ShellRunner(),
         )
 
-        send_parent = (
-            parent_snapshot if effective_kind == "incremental" else None
+        plan_items = _build_plan(config, state, now, snapshot_manager, selected)
+        plan_by_name = {item.subvolume: item for item in plan_items}
+        work_items = _filter_plan_items(
+            plan_by_name, selected, args.once, logger
         )
-        stream = open_btrfs_send(snapshot.path, send_parent)
-        chunks: list[ChunkEntry] = []
-        local_chunks: list[dict[str, object]] = []
-        total_bytes = 0
-        try:
-            for chunk in chunk_stream(
-                stream.stdout, config.s3.chunk_size_bytes
-            ):
-                chunk_key = (
-                    f"{prefix}subvol/{subvol_name}/{effective_kind}/"
-                    f"chunk-{timestamp}-{chunk.index}.bin"
-                )
-                result = chunk_uploader.upload_stream(chunk_key, chunk.reader)
-                chunks.append(
-                    ChunkEntry(
-                        key=chunk_key,
-                        size=chunk.size,
-                        sha256=chunk.sha256,
-                        etag=result.etag,
-                    )
-                )
-                local_chunks.append(
-                    {
-                        "index": chunk.index,
-                        "key": chunk_key,
-                        "sha256": chunk.sha256,
-                    }
-                )
-                total_bytes += chunk.size
-        finally:
-            stream.stdout.close()
-            _stdout, stderr = stream.process.communicate()
-            if stream.process.returncode != 0:
-                error = stderr.decode("utf-8", errors="replace").strip()
-                logger.error(
-                    "event=btrfs_send_failed subvolume=%s error=%s",
-                    subvol_name,
-                    error,
-                )
-                return 1
+        if not work_items:
+            logger.info("event=backup_not_due status=skipped")
+            return 0
 
-        manifest_key = (
-            f"{prefix}subvol/{subvol_name}/{effective_kind}/"
-            f"manifest-{timestamp}.json"
-        )
-        current_key = f"{prefix}subvol/{subvol_name}/current.json"
-        manifest = Manifest(
-            version=1,
-            subvolume=subvol_name,
-            kind=effective_kind,
-            created_at=timestamp,
-            snapshot=SnapshotInfo(
-                name=snapshot.name,
-                path=str(snapshot.path),
-                uuid=None,
-                parent_uuid=None,
-            ),
-            parent_manifest=parent_manifest if effective_kind == "incremental" else None,
-            chunks=tuple(chunks),
-            total_bytes=total_bytes,
-            chunk_size=config.s3.chunk_size_bytes,
-            s3={"storage_class": config.s3.storage_class_chunks},
-        )
-        pointer = CurrentPointer(
-            manifest_key=manifest_key,
-            kind=effective_kind,
-            created_at=timestamp,
-        )
-        publish_manifest(
+        if args.no_s3 or not _has_aws_credentials():
+            logger.info("event=backup_no_s3 status=skipped")
+            return 0
+
+        client = boto3.client("s3", region_name=config.s3.region)
+        chunk_uploader = S3Uploader(
             client,
             bucket=config.s3.bucket,
-            manifest_key=manifest_key,
-            current_key=current_key,
-            manifest=manifest,
-            pointer=pointer,
-            storage_class=config.s3.storage_class_manifest,
+            storage_class=config.s3.storage_class_chunks,
             sse=config.s3.sse,
-        )
-        logger.info(
-            "event=backup_uploaded subvolume=%s manifest_key=%s chunk_count=%d",
-            subvol_name,
-            manifest_key,
-            len(chunks),
+            part_size=min(config.s3.chunk_size_bytes, MAX_PART_SIZE),
         )
 
-        if write_manifest and subvolume_path == selected[0]:
-            os.makedirs(run_dir, exist_ok=True)
-            manifest_path = os.path.join(run_dir, "manifest.json")
-            local_manifest = {
-                "backup_type": backup_type,
-                "chunks": local_chunks,
-            }
-            with open(manifest_path, "w", encoding="utf-8") as handle:
-                json.dump(local_manifest, handle, indent=2, sort_keys=True)
-            logger.info("event=manifest_written path=%s", manifest_path)
+        for subvolume_path, plan_item, action in work_items:
+            subvol_name = subvolume_path.name
+            subvol_state = state_subvols.get(subvol_name, SubvolumeState())
+            parent_snapshot = (
+                Path(plan_item.parent_snapshot)
+                if plan_item.parent_snapshot
+                else None
+            )
+            parent_manifest = (
+                subvol_state.last_manifest if action == "inc" else None
+            )
+            effective_kind = "full" if action == "full" else "incremental"
+            effective_snapshot_kind = "full" if action == "full" else "inc"
 
-        state_subvols[subvol_name] = SubvolumeState(
-            last_snapshot=str(snapshot.path),
-            last_manifest=manifest_key,
-            last_full_at=timestamp
-            if effective_kind == "full"
-            else subvol_state.last_full_at,
+            snapshot = snapshot_manager.create_snapshot(
+                subvolume_path, subvol_name, effective_snapshot_kind
+            )
+            logger.info(
+                "event=snapshot_created subvolume=%s path=%s kind=%s",
+                subvol_name,
+                snapshot.path,
+                effective_snapshot_kind,
+            )
+
+            send_parent = (
+                parent_snapshot if effective_kind == "incremental" else None
+            )
+            stream = open_btrfs_send(snapshot.path, send_parent)
+            chunks: list[ChunkEntry] = []
+            local_chunks: list[dict[str, object]] = []
+            total_bytes = 0
+            try:
+                for chunk in chunk_stream(
+                    stream.stdout, config.s3.chunk_size_bytes
+                ):
+                    chunk_key = (
+                        f"{prefix}subvol/{subvol_name}/{effective_kind}/"
+                        f"chunk-{timestamp}-{chunk.index}.bin"
+                    )
+                    result = chunk_uploader.upload_stream(
+                        chunk_key, chunk.reader
+                    )
+                    chunks.append(
+                        ChunkEntry(
+                            key=chunk_key,
+                            size=chunk.size,
+                            sha256=chunk.sha256,
+                            etag=result.etag,
+                        )
+                    )
+                    local_chunks.append(
+                        {
+                            "index": chunk.index,
+                            "key": chunk_key,
+                            "sha256": chunk.sha256,
+                        }
+                    )
+                    total_bytes += chunk.size
+            finally:
+                stream.stdout.close()
+                _stdout, stderr = stream.process.communicate()
+                if stream.process.returncode != 0:
+                    error = stderr.decode("utf-8", errors="replace").strip()
+                    logger.error(
+                        "event=btrfs_send_failed subvolume=%s error=%s",
+                        subvol_name,
+                        error,
+                    )
+                    return 1
+
+            manifest_key = (
+                f"{prefix}subvol/{subvol_name}/{effective_kind}/"
+                f"manifest-{timestamp}.json"
+            )
+            current_key = f"{prefix}subvol/{subvol_name}/current.json"
+            manifest = Manifest(
+                version=1,
+                subvolume=subvol_name,
+                kind=effective_kind,
+                created_at=timestamp,
+                snapshot=SnapshotInfo(
+                    name=snapshot.name,
+                    path=str(snapshot.path),
+                    uuid=None,
+                    parent_uuid=None,
+                ),
+                parent_manifest=parent_manifest
+                if effective_kind == "incremental"
+                else None,
+                chunks=tuple(chunks),
+                total_bytes=total_bytes,
+                chunk_size=config.s3.chunk_size_bytes,
+                s3={"storage_class": config.s3.storage_class_chunks},
+            )
+            pointer = CurrentPointer(
+                manifest_key=manifest_key,
+                kind=effective_kind,
+                created_at=timestamp,
+            )
+            publish_manifest(
+                client,
+                bucket=config.s3.bucket,
+                manifest_key=manifest_key,
+                current_key=current_key,
+                manifest=manifest,
+                pointer=pointer,
+                storage_class=config.s3.storage_class_manifest,
+                sse=config.s3.sse,
+            )
+            logger.info(
+                "event=backup_uploaded subvolume=%s manifest_key=%s chunk_count=%d",
+                subvol_name,
+                manifest_key,
+                len(chunks),
+            )
+
+            if write_manifest and subvolume_path == selected[0]:
+                os.makedirs(run_dir, exist_ok=True)
+                manifest_path = os.path.join(run_dir, "manifest.json")
+                local_manifest = {
+                    "backup_type": effective_kind,
+                    "chunks": local_chunks,
+                }
+                with open(manifest_path, "w", encoding="utf-8") as handle:
+                    json.dump(local_manifest, handle, indent=2, sort_keys=True)
+                logger.info("event=manifest_written path=%s", manifest_path)
+
+            state_subvols[subvol_name] = SubvolumeState(
+                last_snapshot=str(snapshot.path),
+                last_manifest=manifest_key,
+                last_full_at=timestamp
+                if effective_kind == "full"
+                else subvol_state.last_full_at,
+            )
+            snapshot_manager.prune_snapshots(
+                subvol_name,
+                config.snapshots.retain,
+                keep_name=parent_snapshot.name if parent_snapshot else None,
+            )
+
+        save_state(
+            config.global_cfg.state_path,
+            State(subvolumes=state_subvols, last_run_at=timestamp),
         )
-        snapshot_manager.prune_snapshots(
-            subvol_name,
-            config.snapshots.retain,
-            keep_name=parent_snapshot.name if parent_snapshot else None,
-        )
 
-    save_state(
-        config.global_cfg.state_path,
-        State(subvolumes=state_subvols, last_run_at=timestamp),
-    )
-
-    return 0
+        return 0
+    finally:
+        lock.release()
 
 
 def _build_plan(
