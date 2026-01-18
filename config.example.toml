@@ -1,0 +1,37 @@
+[global]
+log_level = "info" # debug|info|warning|error|critical
+state_path = "/var/lib/btrfs_to_s3/state.json"
+lock_path = "/var/lock/btrfs_to_s3.lock"
+spool_dir = "/mnt/ssd/btrfs_to_s3_spool"
+spool_size_bytes = 214748364800
+
+[schedule]
+full_every_days = 180
+incremental_every_days = 7
+run_at = "02:00"
+
+[snapshots]
+base_dir = "/srv/snapshots"
+retain = 2
+
+[subvolumes]
+paths = ["/srv/data", "/srv/home"]
+
+[s3]
+bucket = "my-backup-bucket"
+region = "us-east-1"
+prefix = "btrfs/host-01"
+chunk_size_bytes = 214748364800
+storage_class_chunks = "DEEP_ARCHIVE"
+storage_class_manifest = "STANDARD"
+concurrency = 4
+spool_enabled = false
+sse = "AES256"
+
+[restore]
+target_base_dir = "/srv/restore"
+verify_mode = "full" # full|sample|none
+sample_max_files = 1000
+wait_for_restore = true
+restore_timeout_seconds = 259200
+restore_tier = "Standard"
