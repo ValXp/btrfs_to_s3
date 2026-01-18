@@ -17,3 +17,4 @@ Progress
 - 2026-01-17 18:25 - done - Force incremental runs with --once
 - 2026-01-17 18:28 - done - Cover all subvolumes in backup runs
 - 2026-01-17 18:31 - done - Validate S3 manifest and current pointer
+- 2026-01-17 18:33 - done - Verify S3 layout and chunk metadata
