@@ -10,8 +10,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 import hashlib
+import logging
 
 from btrfs_to_s3 import cli
+from btrfs_to_s3.orchestrator import (
+    BackupOrchestrator,
+    BackupRequest,
+    RestoreOrchestrator,
+    RestoreRequest,
+)
 from btrfs_to_s3.uploader import UploadResult
 from btrfs_to_s3.config import (
     Config,
@@ -24,7 +31,7 @@ from btrfs_to_s3.config import (
 )
 from btrfs_to_s3.lock import LockError
 from btrfs_to_s3.planner import PlanItem
-from btrfs_to_s3.snapshots import Snapshot
+from btrfs_to_s3.snapshots import Snapshot, SnapshotManager
 
 CONFIG_TOML = """
 [subvolumes]
@@ -144,13 +151,12 @@ class CliTests(unittest.TestCase):
     def test_backup_skips_when_not_due(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)
-            args = cli.parse_args(
-                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            request = BackupRequest(
+                dry_run=False,
+                subvolume_names=None,
+                once=False,
+                no_s3=False,
             )
-            args.dry_run = False
-            args.no_s3 = False
-            args.once = False
-            args.subvolume = None
             plan = [
                 PlanItem(
                     subvolume="data",
@@ -160,24 +166,26 @@ class CliTests(unittest.TestCase):
                 )
             ]
             with mock.patch(
-                "btrfs_to_s3.cli.plan_backups", return_value=plan
+                "btrfs_to_s3.orchestrator.plan_backups", return_value=plan
             ), mock.patch(
-                "btrfs_to_s3.cli._has_aws_credentials",
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
                 side_effect=AssertionError("credentials should not be checked"),
             ):
-                result = cli.run_backup(args, config)
+                orchestrator = BackupOrchestrator(
+                    config, logger=logging.getLogger("btrfs_to_s3.cli")
+                )
+                result = orchestrator.run(request)
             self.assertEqual(result, 0)
 
     def test_backup_once_forces_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)
-            args = cli.parse_args(
-                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            request = BackupRequest(
+                dry_run=False,
+                subvolume_names=None,
+                once=True,
+                no_s3=False,
             )
-            args.dry_run = False
-            args.no_s3 = False
-            args.once = True
-            args.subvolume = None
             plan = [
                 PlanItem(
                     subvolume="data",
@@ -187,24 +195,27 @@ class CliTests(unittest.TestCase):
                 )
             ]
             with mock.patch(
-                "btrfs_to_s3.cli.plan_backups", return_value=plan
+                "btrfs_to_s3.orchestrator.plan_backups", return_value=plan
             ), mock.patch(
-                "btrfs_to_s3.cli._has_aws_credentials", return_value=False
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=False,
             ) as creds_check:
-                result = cli.run_backup(args, config)
+                orchestrator = BackupOrchestrator(
+                    config, logger=logging.getLogger("btrfs_to_s3.cli")
+                )
+                result = orchestrator.run(request)
             self.assertEqual(result, 0)
             self.assertTrue(creds_check.called)
 
     def test_backup_lock_contention_returns_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)
-            args = cli.parse_args(
-                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            request = BackupRequest(
+                dry_run=False,
+                subvolume_names=None,
+                once=False,
+                no_s3=False,
             )
-            args.dry_run = False
-            args.no_s3 = False
-            args.once = False
-            args.subvolume = None
 
             class FakeLock:
                 def __init__(self, path: Path) -> None:
@@ -213,20 +224,22 @@ class CliTests(unittest.TestCase):
                 def acquire(self):
                     raise LockError("locked")
 
-            with mock.patch("btrfs_to_s3.cli.LockFile", FakeLock):
-                result = cli.run_backup(args, config)
+            with mock.patch("btrfs_to_s3.orchestrator.LockFile", FakeLock):
+                orchestrator = BackupOrchestrator(
+                    config, logger=logging.getLogger("btrfs_to_s3.cli")
+                )
+                result = orchestrator.run(request)
             self.assertEqual(result, 1)
 
     def test_backup_releases_lock_on_skip(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)
-            args = cli.parse_args(
-                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            request = BackupRequest(
+                dry_run=False,
+                subvolume_names=None,
+                once=False,
+                no_s3=False,
             )
-            args.dry_run = False
-            args.no_s3 = False
-            args.once = False
-            args.subvolume = None
             plan = [
                 PlanItem(
                     subvolume="data",
@@ -248,11 +261,14 @@ class CliTests(unittest.TestCase):
                     lock_state["released"] = True
 
             with mock.patch(
-                "btrfs_to_s3.cli.plan_backups", return_value=plan
+                "btrfs_to_s3.orchestrator.plan_backups", return_value=plan
             ), mock.patch(
-                "btrfs_to_s3.cli.LockFile", FakeLock
+                "btrfs_to_s3.orchestrator.LockFile", FakeLock
             ):
-                result = cli.run_backup(args, config)
+                orchestrator = BackupOrchestrator(
+                    config, logger=logging.getLogger("btrfs_to_s3.cli")
+                )
+                result = orchestrator.run(request)
             self.assertEqual(result, 0)
             self.assertTrue(lock_state["released"])
 
@@ -261,13 +277,12 @@ class CliTests(unittest.TestCase):
             config = self._make_config(temp_dir)
             lock_path = config.global_cfg.lock_path
             lock_path.write_text("999999")
-            args = cli.parse_args(
-                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            request = BackupRequest(
+                dry_run=False,
+                subvolume_names=None,
+                once=False,
+                no_s3=False,
             )
-            args.dry_run = False
-            args.no_s3 = False
-            args.once = False
-            args.subvolume = None
             plan = [
                 PlanItem(
                     subvolume="data",
@@ -277,25 +292,27 @@ class CliTests(unittest.TestCase):
                 )
             ]
             with mock.patch(
-                "btrfs_to_s3.cli.plan_backups", return_value=plan
+                "btrfs_to_s3.orchestrator.plan_backups", return_value=plan
             ), mock.patch(
-                "btrfs_to_s3.cli._has_aws_credentials",
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
                 side_effect=AssertionError("credentials should not be checked"),
             ):
-                result = cli.run_backup(args, config)
+                orchestrator = BackupOrchestrator(
+                    config, logger=logging.getLogger("btrfs_to_s3.cli")
+                )
+                result = orchestrator.run(request)
             self.assertEqual(result, 0)
             self.assertFalse(lock_path.exists())
 
     def test_backup_missing_parent_falls_back_to_full(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)
-            args = cli.parse_args(
-                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            request = BackupRequest(
+                dry_run=False,
+                subvolume_names=None,
+                once=False,
+                no_s3=False,
             )
-            args.dry_run = False
-            args.no_s3 = False
-            args.once = False
-            args.subvolume = None
             missing_parent = str(Path(temp_dir) / "missing_snapshot")
             plan = [
                 PlanItem(
@@ -333,24 +350,35 @@ class CliTests(unittest.TestCase):
                 )
 
             with mock.patch(
-                "btrfs_to_s3.cli.plan_backups", return_value=plan
+                "btrfs_to_s3.orchestrator.plan_backups", return_value=plan
             ), mock.patch(
-                "btrfs_to_s3.cli._has_aws_credentials", return_value=True
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
             ), mock.patch(
-                "btrfs_to_s3.cli._get_s3_client", return_value=object()
+                "btrfs_to_s3.orchestrator._get_s3_client",
+                return_value=object(),
             ), mock.patch(
-                "btrfs_to_s3.cli.chunk_stream", return_value=iter([])
+                "btrfs_to_s3.orchestrator.chunk_stream",
+                return_value=iter([]),
             ), mock.patch(
-                "btrfs_to_s3.cli.publish_manifest"
+                "btrfs_to_s3.orchestrator.publish_manifest"
             ), mock.patch(
-                "btrfs_to_s3.cli.open_btrfs_send",
+                "btrfs_to_s3.orchestrator.open_btrfs_send",
                 side_effect=fake_open_btrfs_send,
             ), mock.patch.object(
-                cli.SnapshotManager, "create_snapshot", fake_create_snapshot
+                BackupOrchestrator, "_make_uploader"
+            ) as make_uploader, mock.patch.object(
+                BackupOrchestrator, "_write_manifest"
             ), mock.patch.object(
-                cli.SnapshotManager, "prune_snapshots", return_value=[]
+                SnapshotManager, "create_snapshot", fake_create_snapshot
+            ), mock.patch.object(
+                SnapshotManager, "prune_snapshots", return_value=[]
             ):
-                result = cli.run_backup(args, config)
+                make_uploader.return_value = mock.Mock(client=object())
+                orchestrator = BackupOrchestrator(
+                    config, logger=logging.getLogger("btrfs_to_s3.cli")
+                )
+                result = orchestrator.run(request)
             self.assertEqual(result, 0)
             self.assertEqual(created.get("kind"), "full")
             self.assertIsNone(parent_holder.get("parent"))
@@ -358,13 +386,12 @@ class CliTests(unittest.TestCase):
     def test_backup_missing_parent_manifest_falls_back_to_full(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)
-            args = cli.parse_args(
-                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            request = BackupRequest(
+                dry_run=False,
+                subvolume_names=None,
+                once=False,
+                no_s3=False,
             )
-            args.dry_run = False
-            args.no_s3 = False
-            args.once = False
-            args.subvolume = None
 
             state_path = config.global_cfg.state_path
             state_path.write_text(
@@ -412,24 +439,35 @@ class CliTests(unittest.TestCase):
                 )
 
             with mock.patch(
-                "btrfs_to_s3.cli.plan_backups", return_value=plan
+                "btrfs_to_s3.orchestrator.plan_backups", return_value=plan
             ), mock.patch(
-                "btrfs_to_s3.cli._has_aws_credentials", return_value=True
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
             ), mock.patch(
-                "btrfs_to_s3.cli._get_s3_client", return_value=object()
+                "btrfs_to_s3.orchestrator._get_s3_client",
+                return_value=object(),
             ), mock.patch(
-                "btrfs_to_s3.cli.chunk_stream", return_value=iter([])
+                "btrfs_to_s3.orchestrator.chunk_stream",
+                return_value=iter([]),
             ), mock.patch(
-                "btrfs_to_s3.cli.publish_manifest"
+                "btrfs_to_s3.orchestrator.publish_manifest"
             ), mock.patch(
-                "btrfs_to_s3.cli.open_btrfs_send",
+                "btrfs_to_s3.orchestrator.open_btrfs_send",
                 side_effect=fake_open_btrfs_send,
             ), mock.patch.object(
-                cli.SnapshotManager, "create_snapshot", fake_create_snapshot
+                BackupOrchestrator, "_make_uploader"
+            ) as make_uploader, mock.patch.object(
+                BackupOrchestrator, "_write_manifest"
             ), mock.patch.object(
-                cli.SnapshotManager, "prune_snapshots", return_value=[]
+                SnapshotManager, "create_snapshot", fake_create_snapshot
+            ), mock.patch.object(
+                SnapshotManager, "prune_snapshots", return_value=[]
             ):
-                result = cli.run_backup(args, config)
+                make_uploader.return_value = mock.Mock(client=object())
+                orchestrator = BackupOrchestrator(
+                    config, logger=logging.getLogger("btrfs_to_s3.cli")
+                )
+                result = orchestrator.run(request)
             self.assertEqual(result, 0)
             self.assertEqual(created.get("kind"), "full")
             self.assertIsNone(parent_holder.get("parent"))
@@ -437,13 +475,12 @@ class CliTests(unittest.TestCase):
     def test_backup_logs_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)
-            args = cli.parse_args(
-                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            request = BackupRequest(
+                dry_run=False,
+                subvolume_names=None,
+                once=False,
+                no_s3=False,
             )
-            args.dry_run = False
-            args.no_s3 = False
-            args.once = False
-            args.subvolume = None
             plan = [
                 PlanItem(
                     subvolume="data",
@@ -481,7 +518,7 @@ class CliTests(unittest.TestCase):
 
             class FakeUploader:
                 def __init__(self, *args, **kwargs) -> None:
-                    pass
+                    self.client = object()
 
                 def upload_stream(self, key: str, reader: io.BytesIO) -> UploadResult:
                     return UploadResult(key=key, size=0, etag="etag")
@@ -500,31 +537,36 @@ class CliTests(unittest.TestCase):
             time_values = iter([10.0, 12.5])
 
             with mock.patch(
-                "btrfs_to_s3.cli.plan_backups", return_value=plan
+                "btrfs_to_s3.orchestrator.plan_backups", return_value=plan
             ), mock.patch(
-                "btrfs_to_s3.cli._has_aws_credentials", return_value=True
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
             ), mock.patch(
-                "btrfs_to_s3.cli._get_s3_client", return_value=object()
+                "btrfs_to_s3.orchestrator._get_s3_client",
+                return_value=object(),
             ), mock.patch(
-                "btrfs_to_s3.cli.chunk_stream",
+                "btrfs_to_s3.orchestrator.chunk_stream",
                 return_value=iter([FakeChunk(0, b"data")]),
             ), mock.patch(
-                "btrfs_to_s3.cli.publish_manifest"
+                "btrfs_to_s3.orchestrator.publish_manifest"
             ), mock.patch(
-                "btrfs_to_s3.cli.open_btrfs_send",
+                "btrfs_to_s3.orchestrator.open_btrfs_send",
                 side_effect=fake_open_btrfs_send,
             ), mock.patch.object(
-                cli.SnapshotManager, "create_snapshot", fake_create_snapshot
+                SnapshotManager, "create_snapshot", fake_create_snapshot
             ), mock.patch.object(
-                cli.SnapshotManager, "prune_snapshots", return_value=[]
+                SnapshotManager, "prune_snapshots", return_value=[]
             ), mock.patch(
-                "btrfs_to_s3.cli.S3Uploader", FakeUploader
+                "btrfs_to_s3.orchestrator.S3Uploader", FakeUploader
             ), mock.patch(
-                "btrfs_to_s3.cli.time.monotonic",
+                "btrfs_to_s3.orchestrator.time.monotonic",
                 side_effect=lambda: next(time_values),
             ):
+                orchestrator = BackupOrchestrator(
+                    config, logger=logging.getLogger("btrfs_to_s3.cli")
+                )
                 with self.assertLogs("btrfs_to_s3.cli", level="INFO") as logs:
-                    result = cli.run_backup(args, config)
+                    result = orchestrator.run(request)
             self.assertEqual(result, 0)
             metrics_logs = [
                 entry
@@ -536,13 +578,12 @@ class CliTests(unittest.TestCase):
     def test_backup_upload_failure_cleans_up_send(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)
-            args = cli.parse_args(
-                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            request = BackupRequest(
+                dry_run=False,
+                subvolume_names=None,
+                once=False,
+                no_s3=False,
             )
-            args.dry_run = False
-            args.no_s3 = False
-            args.once = False
-            args.subvolume = None
             plan = [
                 PlanItem(
                     subvolume="data",
@@ -577,7 +618,7 @@ class CliTests(unittest.TestCase):
 
             class FakeUploader:
                 def __init__(self, *args, **kwargs) -> None:
-                    pass
+                    self.client = object()
 
                 def upload_stream(self, key: str, reader: io.BytesIO) -> UploadResult:
                     raise RuntimeError("upload failed")
@@ -594,30 +635,36 @@ class CliTests(unittest.TestCase):
                 )
 
             with mock.patch(
-                "btrfs_to_s3.cli.plan_backups", return_value=plan
+                "btrfs_to_s3.orchestrator.plan_backups", return_value=plan
             ), mock.patch(
-                "btrfs_to_s3.cli._has_aws_credentials", return_value=True
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
             ), mock.patch(
-                "btrfs_to_s3.cli._get_s3_client", return_value=object()
+                "btrfs_to_s3.orchestrator._get_s3_client",
+                return_value=object(),
             ), mock.patch(
-                "btrfs_to_s3.cli.chunk_stream",
+                "btrfs_to_s3.orchestrator.chunk_stream",
                 return_value=iter([FakeChunk(0, b"data")]),
             ), mock.patch(
-                "btrfs_to_s3.cli.publish_manifest"
+                "btrfs_to_s3.orchestrator.publish_manifest"
             ) as publish_manifest, mock.patch(
-                "btrfs_to_s3.cli.open_btrfs_send",
+                "btrfs_to_s3.orchestrator.open_btrfs_send",
                 side_effect=fake_open_btrfs_send,
             ), mock.patch(
-                "btrfs_to_s3.cli.cleanup_btrfs_send", return_value="send failed"
+                "btrfs_to_s3.orchestrator.cleanup_btrfs_send",
+                return_value="send failed",
             ) as cleanup, mock.patch.object(
-                cli.SnapshotManager, "create_snapshot", fake_create_snapshot
+                SnapshotManager, "create_snapshot", fake_create_snapshot
             ), mock.patch.object(
-                cli.SnapshotManager, "prune_snapshots", return_value=[]
+                SnapshotManager, "prune_snapshots", return_value=[]
             ), mock.patch(
-                "btrfs_to_s3.cli.S3Uploader", FakeUploader
+                "btrfs_to_s3.orchestrator.S3Uploader", FakeUploader
             ):
+                orchestrator = BackupOrchestrator(
+                    config, logger=logging.getLogger("btrfs_to_s3.cli")
+                )
                 with self.assertLogs("btrfs_to_s3.cli", level="ERROR") as logs:
-                    result = cli.run_backup(args, config)
+                    result = orchestrator.run(request)
             self.assertEqual(result, 1)
             publish_manifest.assert_not_called()
             self.assertTrue(cleanup.called)
@@ -632,40 +679,40 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)
             target_path = Path(temp_dir) / "restore" / "data"
-            args = cli.parse_args(
-                [
-                    "restore",
-                    "--config",
-                    str(Path(temp_dir) / "config.toml"),
-                    "--subvolume",
-                    "data",
-                    "--target",
-                    str(target_path),
-                    "--verify",
-                    "none",
-                ]
+            request = RestoreRequest(
+                subvolume="data",
+                target=target_path,
+                manifest_key=None,
+                restore_timeout=None,
+                wait_restore=None,
+                verify="none",
             )
 
             time_values = iter([5.0, 6.5])
 
             with mock.patch(
-                "btrfs_to_s3.cli._has_aws_credentials", return_value=True
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
             ), mock.patch(
-                "btrfs_to_s3.cli._get_s3_client", return_value=object()
+                "btrfs_to_s3.orchestrator._get_s3_client",
+                return_value=object(),
             ), mock.patch(
-                "btrfs_to_s3.cli.fetch_current_manifest_key",
+                "btrfs_to_s3.orchestrator.fetch_current_manifest_key",
                 return_value="manifest.json",
             ), mock.patch(
-                "btrfs_to_s3.cli.resolve_manifest_chain",
+                "btrfs_to_s3.orchestrator.resolve_manifest_chain",
                 return_value=["manifest"],
             ), mock.patch(
-                "btrfs_to_s3.cli.restore_chain", return_value=2048
+                "btrfs_to_s3.orchestrator.restore_chain", return_value=2048
             ), mock.patch(
-                "btrfs_to_s3.cli.time.monotonic",
+                "btrfs_to_s3.orchestrator.time.monotonic",
                 side_effect=lambda: next(time_values),
             ):
+                orchestrator = RestoreOrchestrator(
+                    config, logger=logging.getLogger("btrfs_to_s3.cli")
+                )
                 with self.assertLogs("btrfs_to_s3.cli", level="INFO") as logs:
-                    result = cli.run_restore(args, config)
+                    result = orchestrator.run(request)
             self.assertEqual(result, 0)
             metrics_logs = [
                 entry

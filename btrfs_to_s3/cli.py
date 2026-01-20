@@ -3,15 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import os
 import sys
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
-import subprocess
 
 from btrfs_to_s3.config import (
     Config,
@@ -20,23 +15,12 @@ from btrfs_to_s3.config import (
     load_config,
     validate_config,
 )
-from btrfs_to_s3.manifest import ChunkEntry, CurrentPointer, Manifest, SnapshotInfo, publish_manifest
-from btrfs_to_s3.restore import (
-    RestoreError,
-    fetch_current_manifest_key,
-    resolve_manifest_chain,
-    restore_chain,
-    verify_restore,
+from btrfs_to_s3.orchestrator import (
+    BackupOrchestrator,
+    BackupRequest,
+    RestoreOrchestrator,
+    RestoreRequest,
 )
-from btrfs_to_s3.snapshots import SnapshotManager
-from btrfs_to_s3.chunker import chunk_stream
-from btrfs_to_s3.lock import LockError, LockFile
-from btrfs_to_s3.planner import PlanItem, plan_backups
-from btrfs_to_s3.streamer import cleanup_btrfs_send, open_btrfs_send
-from btrfs_to_s3.state import State, SubvolumeState, load_state, save_state
-from btrfs_to_s3.uploader import MAX_PART_SIZE, S3Uploader
-from btrfs_to_s3.metrics import calculate_metrics, format_throughput
-from btrfs_to_s3.path_utils import ensure_sbin_on_path
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
@@ -134,347 +118,16 @@ def main(argv: Iterable[str] | None = None) -> int:
 
 
 def run_backup(args: argparse.Namespace, config: Config) -> int:
-    logger = logging.getLogger(__name__)
-    if args.dry_run:
-        logger.info("event=backup_dry_run status=skipped")
-        return 0
-
-    lock = LockFile(config.global_cfg.lock_path)
-    try:
-        lock.acquire()
-    except LockError as exc:
-        logger.error("event=backup_lock_failed error=%s", exc)
-        return 1
-
-    try:
-        now = datetime.now(timezone.utc)
-        timestamp = now.strftime("%Y%m%dT%H%M%SZ")
-        prefix = config.s3.prefix.rstrip("/")
-        if prefix:
-            prefix = prefix + "/"
-
-        run_dir = os.environ.get("BTRFS_TO_S3_HARNESS_RUN_DIR")
-        write_manifest = run_dir is not None
-
-        state = load_state(config.global_cfg.state_path)
-        state_subvols = dict(state.subvolumes)
-
-        subvolume_paths = list(config.subvolumes.paths)
-        if args.subvolume:
-            selected = [
-                path
-                for path in subvolume_paths
-                if path.name in set(args.subvolume)
-            ]
-        else:
-            selected = subvolume_paths[:1] if write_manifest else subvolume_paths
-
-        if not selected:
-            logger.error("event=backup_no_subvolumes status=failed")
-            return 2
-
-        snapshot_manager = SnapshotManager(
-            config.snapshots.base_dir,
-            _ShellRunner(),
-        )
-
-        plan_items = _build_plan(config, state, now, snapshot_manager, selected)
-        plan_by_name = {item.subvolume: item for item in plan_items}
-        work_items = _filter_plan_items(
-            plan_by_name, selected, args.once, logger
-        )
-        if not work_items:
-            logger.info("event=backup_not_due status=skipped")
-            return 0
-
-        if args.no_s3 or not _has_aws_credentials():
-            logger.info("event=backup_no_s3 status=skipped")
-            return 0
-
-        try:
-            client = _get_s3_client(config.s3.region)
-        except RuntimeError as exc:
-            logger.error("event=backup_s3_client_failed error=%s", exc)
-            return 1
-        chunk_uploader = S3Uploader(
-            client,
-            bucket=config.s3.bucket,
-            storage_class=config.s3.storage_class_chunks,
-            sse=config.s3.sse,
-            part_size=min(config.s3.chunk_size_bytes, MAX_PART_SIZE),
-            concurrency=config.s3.concurrency,
-            spool_dir=config.global_cfg.spool_dir
-            if config.s3.spool_enabled
-            else None,
-            spool_size_bytes=config.global_cfg.spool_size_bytes,
-        )
-
-        for subvolume_path, plan_item, action in work_items:
-            subvol_name = subvolume_path.name
-            subvol_state = state_subvols.get(subvol_name, SubvolumeState())
-            parent_snapshot = None
-            if action == "inc" and plan_item.parent_snapshot:
-                parent_snapshot = Path(plan_item.parent_snapshot)
-                if not parent_snapshot.exists():
-                    logger.info(
-                        "event=backup_parent_missing subvolume=%s path=%s",
-                        subvol_name,
-                        parent_snapshot,
-                    )
-                    action = "full"
-                    parent_snapshot = None
-            if action == "inc" and not subvol_state.last_manifest:
-                logger.info(
-                    "event=backup_parent_manifest_missing subvolume=%s",
-                    subvol_name,
-                )
-                action = "full"
-                parent_snapshot = None
-            parent_manifest = (
-                subvol_state.last_manifest if action == "inc" else None
-            )
-            effective_kind = "full" if action == "full" else "incremental"
-            effective_snapshot_kind = "full" if action == "full" else "inc"
-
-            snapshot = snapshot_manager.create_snapshot(
-                subvolume_path, subvol_name, effective_snapshot_kind
-            )
-            logger.info(
-                "event=snapshot_created subvolume=%s path=%s kind=%s",
-                subvol_name,
-                snapshot.path,
-                effective_snapshot_kind,
-            )
-
-            send_parent = (
-                parent_snapshot if effective_kind == "incremental" else None
-            )
-            start_time = time.monotonic()
-            stream = open_btrfs_send(snapshot.path, send_parent)
-            chunks: list[ChunkEntry] = []
-            local_chunks: list[dict[str, object]] = []
-            total_bytes = 0
-            stream_error: Exception | None = None
-            try:
-                for chunk in chunk_stream(
-                    stream.stdout, config.s3.chunk_size_bytes
-                ):
-                    chunk_key = (
-                        f"{prefix}subvol/{subvol_name}/{effective_kind}/"
-                        f"chunk-{timestamp}-{chunk.index}.bin"
-                    )
-                    result = chunk_uploader.upload_stream(
-                        chunk_key, chunk.reader
-                    )
-                    chunks.append(
-                        ChunkEntry(
-                            key=chunk_key,
-                            size=chunk.size,
-                            sha256=chunk.sha256,
-                            etag=result.etag,
-                        )
-                    )
-                    local_chunks.append(
-                        {
-                            "index": chunk.index,
-                            "key": chunk_key,
-                            "sha256": chunk.sha256,
-                        }
-                    )
-                    total_bytes += chunk.size
-            except Exception as exc:
-                stream_error = exc
-            finally:
-                if stream_error is not None:
-                    error = cleanup_btrfs_send(
-                        stream.process, stdout=stream.stdout
-                    )
-                    logger.error(
-                        "event=backup_stream_failed subvolume=%s error=%s btrfs_send_error=%s",
-                        subvol_name,
-                        stream_error,
-                        error,
-                    )
-                    return 1
-                stream.stdout.close()
-                _stdout, stderr = stream.process.communicate()
-                if stream.process.returncode != 0:
-                    error = stderr.decode("utf-8", errors="replace").strip()
-                    logger.error(
-                        "event=btrfs_send_failed subvolume=%s error=%s",
-                        subvol_name,
-                        error,
-                    )
-                    return 1
-
-            manifest_key = (
-                f"{prefix}subvol/{subvol_name}/{effective_kind}/"
-                f"manifest-{timestamp}.json"
-            )
-            current_key = f"{prefix}subvol/{subvol_name}/current.json"
-            manifest = Manifest(
-                version=1,
-                subvolume=subvol_name,
-                kind=effective_kind,
-                created_at=timestamp,
-                snapshot=SnapshotInfo(
-                    name=snapshot.name,
-                    path=str(snapshot.path),
-                    uuid=None,
-                    parent_uuid=None,
-                ),
-                parent_manifest=parent_manifest
-                if effective_kind == "incremental"
-                else None,
-                chunks=tuple(chunks),
-                total_bytes=total_bytes,
-                chunk_size=config.s3.chunk_size_bytes,
-                s3={"storage_class": config.s3.storage_class_chunks},
-            )
-            pointer = CurrentPointer(
-                manifest_key=manifest_key,
-                kind=effective_kind,
-                created_at=timestamp,
-            )
-            publish_manifest(
-                client,
-                bucket=config.s3.bucket,
-                manifest_key=manifest_key,
-                current_key=current_key,
-                manifest=manifest,
-                pointer=pointer,
-                storage_class=config.s3.storage_class_manifest,
-                sse=config.s3.sse,
-            )
-            elapsed = time.monotonic() - start_time
-            metrics = calculate_metrics(total_bytes, elapsed)
-            logger.info(
-                "event=backup_metrics subvolume=%s total_bytes=%d elapsed_seconds=%.3f throughput=%s",
-                subvol_name,
-                metrics.total_bytes,
-                metrics.elapsed_seconds,
-                format_throughput(metrics.throughput_bytes_per_sec),
-            )
-            logger.info(
-                "event=backup_uploaded subvolume=%s manifest_key=%s chunk_count=%d",
-                subvol_name,
-                manifest_key,
-                len(chunks),
-            )
-
-            if write_manifest and subvolume_path == selected[0]:
-                os.makedirs(run_dir, exist_ok=True)
-                manifest_path = os.path.join(run_dir, "manifest.json")
-                local_manifest = {
-                    "backup_type": effective_kind,
-                    "chunks": local_chunks,
-                }
-                with open(manifest_path, "w", encoding="utf-8") as handle:
-                    json.dump(local_manifest, handle, indent=2, sort_keys=True)
-                logger.info("event=manifest_written path=%s", manifest_path)
-
-            state_subvols[subvol_name] = SubvolumeState(
-                last_snapshot=str(snapshot.path),
-                last_manifest=manifest_key,
-                last_full_at=timestamp
-                if effective_kind == "full"
-                else subvol_state.last_full_at,
-            )
-            snapshot_manager.prune_snapshots(
-                subvol_name,
-                config.snapshots.retain,
-                keep_name=parent_snapshot.name if parent_snapshot else None,
-            )
-
-        save_state(
-            config.global_cfg.state_path,
-            State(subvolumes=state_subvols, last_run_at=timestamp),
-        )
-
-        return 0
-    finally:
-        lock.release()
-
-
-def _build_plan(
-    config: Config,
-    state: State,
-    now: datetime,
-    snapshot_manager: SnapshotManager,
-    selected: list[Path],
-) -> list[PlanItem]:
-    available_snapshots: set[str] = set()
-    for path in selected:
-        for snapshot in snapshot_manager.list_snapshots(path.name):
-            available_snapshots.add(snapshot.name)
-    if len(selected) == len(config.subvolumes.paths):
-        plan_config = config
-    else:
-        plan_config = Config(
-            global_cfg=config.global_cfg,
-            schedule=config.schedule,
-            snapshots=config.snapshots,
-            subvolumes=type(config.subvolumes)(paths=tuple(selected)),
-            s3=config.s3,
-            restore=config.restore,
-        )
-    return plan_backups(
-        plan_config, state, now, available_snapshots=available_snapshots
+    request = BackupRequest(
+        dry_run=args.dry_run,
+        subvolume_names=tuple(args.subvolume) if args.subvolume else None,
+        once=args.once,
+        no_s3=args.no_s3,
     )
-
-
-def _filter_plan_items(
-    plan_by_name: dict[str, PlanItem],
-    selected: list[Path],
-    force_run: bool,
-    logger: logging.Logger,
-) -> list[tuple[Path, PlanItem, str]]:
-    work_items: list[tuple[Path, PlanItem, str]] = []
-    for path in selected:
-        plan = plan_by_name.get(path.name)
-        if plan is None:
-            continue
-        action = plan.action
-        if action == "skip" and force_run:
-            action = "inc" if plan.parent_snapshot else "full"
-        if action == "skip":
-            logger.info(
-                "event=backup_not_due subvolume=%s reason=%s",
-                plan.subvolume,
-                plan.reason,
-            )
-            continue
-        work_items.append((path, plan, action))
-    return work_items
-
-
-class _ShellRunner:
-    def run(self, args: list[str]) -> None:
-        env = os.environ.copy()
-        env["PATH"] = ensure_sbin_on_path(env.get("PATH", ""))
-        subprocess.run(
-            args,
-            check=True,
-            text=True,
-            capture_output=True,
-            env=env,
-        )
-
-
-def _has_aws_credentials() -> bool:
-    if os.environ.get("AWS_PROFILE"):
-        return True
-    access_key = os.environ.get("AWS_ACCESS_KEY_ID")
-    secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-    return bool(access_key and secret_key)
-
-
-def _get_s3_client(region: str):
-    try:
-        import boto3
-    except ImportError as exc:
-        raise RuntimeError("boto3 is required for S3 operations") from exc
-    return boto3.client("s3", region_name=region)
+    orchestrator = BackupOrchestrator(
+        config, logger=logging.getLogger(__name__)
+    )
+    return orchestrator.run(request)
 
 
 def _load_and_override_config(args: argparse.Namespace) -> Config:
@@ -517,96 +170,15 @@ def _parse_level(value: str) -> int:
 
 
 def run_restore(args: argparse.Namespace, config: Config) -> int:
-    logger = logging.getLogger(__name__)
-    if not _has_aws_credentials():
-        logger.error("event=restore_no_credentials status=failed")
-        return 1
-
-    try:
-        client = _get_s3_client(config.s3.region)
-    except RuntimeError as exc:
-        logger.error("event=restore_s3_client_failed error=%s", exc)
-        return 1
-    prefix = config.s3.prefix.rstrip("/")
-    if prefix:
-        prefix = prefix + "/"
-    current_key = f"{prefix}subvol/{args.subvolume}/current.json"
-    manifest_key = args.manifest_key
-    if not manifest_key:
-        try:
-            manifest_key = fetch_current_manifest_key(
-                client, config.s3.bucket, current_key
-            )
-        except RestoreError as exc:
-            logger.error("event=restore_current_failed error=%s", exc)
-            return 1
-
-    try:
-        manifests = resolve_manifest_chain(
-            client, config.s3.bucket, manifest_key
-        )
-    except RestoreError as exc:
-        logger.error("event=restore_manifest_failed error=%s", exc)
-        return 1
-
-    wait_restore = (
-        args.wait_restore
-        if args.wait_restore is not None
-        else config.restore.wait_for_restore
+    request = RestoreRequest(
+        subvolume=args.subvolume,
+        target=Path(args.target).expanduser(),
+        manifest_key=args.manifest_key,
+        restore_timeout=args.restore_timeout,
+        wait_restore=args.wait_restore,
+        verify=args.verify,
     )
-    restore_timeout = (
-        args.restore_timeout
-        if args.restore_timeout is not None
-        else config.restore.restore_timeout_seconds
+    orchestrator = RestoreOrchestrator(
+        config, logger=logging.getLogger(__name__)
     )
-    start_time = time.monotonic()
-    try:
-        total_bytes = restore_chain(
-            client,
-            config.s3.bucket,
-            manifests,
-            Path(args.target).expanduser(),
-            wait_for_restore=wait_restore,
-            restore_tier=config.restore.restore_tier,
-            restore_timeout_seconds=restore_timeout,
-        )
-    except RestoreError as exc:
-        logger.error("event=restore_failed error=%s", exc)
-        return 1
-    elapsed = time.monotonic() - start_time
-    metrics = calculate_metrics(total_bytes, elapsed)
-    logger.info(
-        "event=restore_metrics subvolume=%s total_bytes=%d elapsed_seconds=%.3f throughput=%s",
-        args.subvolume,
-        metrics.total_bytes,
-        metrics.elapsed_seconds,
-        format_throughput(metrics.throughput_bytes_per_sec),
-    )
-    verify_mode = (
-        args.verify if args.verify is not None else config.restore.verify_mode
-    )
-    if verify_mode == "none":
-        logger.info("event=restore_verify_skipped mode=none")
-    else:
-        snapshot_path = manifests[-1].snapshot_path if manifests else None
-        source_path = (
-            Path(snapshot_path).expanduser() if snapshot_path else None
-        )
-        if source_path is None or not source_path.exists():
-            logger.info(
-                "event=restore_verify_source_missing path=%s",
-                snapshot_path or "unknown",
-            )
-        try:
-            verify_restore(
-                source_path,
-                Path(args.target).expanduser(),
-                mode=verify_mode,
-                sample_max_files=config.restore.sample_max_files,
-            )
-        except RestoreError as exc:
-            logger.error("event=restore_verify_failed error=%s", exc)
-            return 1
-        logger.info("event=restore_verify_complete status=ok mode=%s", verify_mode)
-    logger.info("event=restore_complete status=ok")
-    return 0
+    return orchestrator.run(request)

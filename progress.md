@@ -52,3 +52,4 @@
 - 2026-01-19 20:11 MST: Completed Task 13 restore error cleanup; commit "Cleanup btrfs receive on restore failure".
 - 2026-01-19 20:13 MST: Completed Task 14 shared sbin PATH helper; commit "Share sbin PATH helper".
 - 2026-01-19 20:15 MST: Completed Task 15 seekless upload stream handling; commit "Handle non-seekable put_object streams".
+- 2026-01-19 21:02 MST: Completed Task 16 orchestration refactor; commit "Extract backup orchestration classes".
