@@ -533,6 +533,101 @@ class CliTests(unittest.TestCase):
             ]
             self.assertTrue(metrics_logs)
 
+    def test_backup_upload_failure_cleans_up_send(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self._make_config(temp_dir)
+            args = cli.parse_args(
+                ["backup", "--config", str(Path(temp_dir) / "config.toml")]
+            )
+            args.dry_run = False
+            args.no_s3 = False
+            args.once = False
+            args.subvolume = None
+            plan = [
+                PlanItem(
+                    subvolume="data",
+                    action="full",
+                    parent_snapshot=None,
+                    reason="full_due",
+                )
+            ]
+
+            class FakeProcess:
+                pass
+
+            class FakeStream:
+                def __init__(self) -> None:
+                    self.stdout = io.BytesIO(b"stream")
+                    self.process = FakeProcess()
+
+            class FakeChunk:
+                def __init__(self, index: int, payload: bytes) -> None:
+                    self.index = index
+                    self.reader = io.BytesIO(payload)
+                    self._size = len(payload)
+                    self._sha256 = hashlib.sha256(payload).hexdigest()
+
+                @property
+                def size(self) -> int:
+                    return self._size
+
+                @property
+                def sha256(self) -> str:
+                    return self._sha256
+
+            class FakeUploader:
+                def __init__(self, *args, **kwargs) -> None:
+                    pass
+
+                def upload_stream(self, key: str, reader: io.BytesIO) -> UploadResult:
+                    raise RuntimeError("upload failed")
+
+            def fake_open_btrfs_send(path: Path, parent: Path | None):
+                return FakeStream()
+
+            def fake_create_snapshot(self, subvolume_path, subvolume_name, kind):
+                return Snapshot(
+                    name="data__20260101T000000Z__full",
+                    path=Path(temp_dir) / "snap",
+                    kind=kind,
+                    created_at=datetime.now(timezone.utc),
+                )
+
+            with mock.patch(
+                "btrfs_to_s3.cli.plan_backups", return_value=plan
+            ), mock.patch(
+                "btrfs_to_s3.cli._has_aws_credentials", return_value=True
+            ), mock.patch(
+                "btrfs_to_s3.cli._get_s3_client", return_value=object()
+            ), mock.patch(
+                "btrfs_to_s3.cli.chunk_stream",
+                return_value=iter([FakeChunk(0, b"data")]),
+            ), mock.patch(
+                "btrfs_to_s3.cli.publish_manifest"
+            ) as publish_manifest, mock.patch(
+                "btrfs_to_s3.cli.open_btrfs_send",
+                side_effect=fake_open_btrfs_send,
+            ), mock.patch(
+                "btrfs_to_s3.cli.cleanup_btrfs_send", return_value="send failed"
+            ) as cleanup, mock.patch.object(
+                cli.SnapshotManager, "create_snapshot", fake_create_snapshot
+            ), mock.patch.object(
+                cli.SnapshotManager, "prune_snapshots", return_value=[]
+            ), mock.patch(
+                "btrfs_to_s3.cli.S3Uploader", FakeUploader
+            ):
+                with self.assertLogs("btrfs_to_s3.cli", level="ERROR") as logs:
+                    result = cli.run_backup(args, config)
+            self.assertEqual(result, 1)
+            publish_manifest.assert_not_called()
+            self.assertTrue(cleanup.called)
+            error_logs = [
+                entry
+                for entry in logs.output
+                if "event=backup_stream_failed" in entry
+            ]
+            self.assertTrue(error_logs)
+
     def test_restore_logs_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)

@@ -18,6 +18,27 @@ class BtrfsSendProcess:
     stdout: BinaryIO
 
 
+def cleanup_btrfs_send(
+    process: subprocess.Popen[bytes],
+    stdout: BinaryIO | None = None,
+    timeout: float = 5.0,
+) -> str:
+    """Terminate btrfs send and return stderr output."""
+    if stdout is not None:
+        try:
+            stdout.close()
+        except Exception:
+            pass
+    try:
+        if process.poll() is None:
+            process.terminate()
+        _stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        _stdout, stderr = process.communicate()
+    return stderr.decode("utf-8", errors="replace").strip()
+
+
 def open_btrfs_send(
     snapshot_path: Path, parent_snapshot: Path | None = None
 ) -> BtrfsSendProcess:

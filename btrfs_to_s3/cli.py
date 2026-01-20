@@ -32,7 +32,7 @@ from btrfs_to_s3.snapshots import SnapshotManager
 from btrfs_to_s3.chunker import chunk_stream
 from btrfs_to_s3.lock import LockError, LockFile
 from btrfs_to_s3.planner import PlanItem, plan_backups
-from btrfs_to_s3.streamer import open_btrfs_send
+from btrfs_to_s3.streamer import cleanup_btrfs_send, open_btrfs_send
 from btrfs_to_s3.state import State, SubvolumeState, load_state, save_state
 from btrfs_to_s3.uploader import MAX_PART_SIZE, S3Uploader
 from btrfs_to_s3.metrics import calculate_metrics, format_throughput
@@ -253,6 +253,7 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
             chunks: list[ChunkEntry] = []
             local_chunks: list[dict[str, object]] = []
             total_bytes = 0
+            stream_error: Exception | None = None
             try:
                 for chunk in chunk_stream(
                     stream.stdout, config.s3.chunk_size_bytes
@@ -280,7 +281,20 @@ def run_backup(args: argparse.Namespace, config: Config) -> int:
                         }
                     )
                     total_bytes += chunk.size
+            except Exception as exc:
+                stream_error = exc
             finally:
+                if stream_error is not None:
+                    error = cleanup_btrfs_send(
+                        stream.process, stdout=stream.stdout
+                    )
+                    logger.error(
+                        "event=backup_stream_failed subvolume=%s error=%s btrfs_send_error=%s",
+                        subvol_name,
+                        stream_error,
+                        error,
+                    )
+                    return 1
                 stream.stdout.close()
                 _stdout, stderr = stream.process.communicate()
                 if stream.process.returncode != 0:
