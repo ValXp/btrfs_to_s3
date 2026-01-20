@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, IO
 
+from btrfs_to_s3.path_utils import ensure_sbin_on_path
 
 ARCHIVAL_STORAGE_CLASSES = {"GLACIER", "DEEP_ARCHIVE", "GLACIER_IR"}
 
@@ -258,7 +259,7 @@ def verify_metadata(
     if not os.access(target, os.W_OK):
         raise RestoreError(f"restore target is not writable: {target}")
     env = os.environ.copy()
-    env["PATH"] = _ensure_sbin_on_path(env.get("PATH", ""))
+    env["PATH"] = ensure_sbin_on_path(env.get("PATH", ""))
     result = runner(
         ["btrfs", "subvolume", "show", str(target)],
         check=True,
@@ -489,7 +490,7 @@ def _entry_type(path: Path) -> str:
 
 def _delete_subvolume(path: Path) -> None:
     env = os.environ.copy()
-    env["PATH"] = _ensure_sbin_on_path(env.get("PATH", ""))
+    env["PATH"] = ensure_sbin_on_path(env.get("PATH", ""))
     subprocess.run(
         ["btrfs", "subvolume", "delete", str(path)],
         check=True,
@@ -501,7 +502,7 @@ def _delete_subvolume(path: Path) -> None:
 
 def _set_subvolume_writable(path: Path) -> None:
     env = os.environ.copy()
-    env["PATH"] = _ensure_sbin_on_path(env.get("PATH", ""))
+    env["PATH"] = ensure_sbin_on_path(env.get("PATH", ""))
     subprocess.run(
         ["btrfs", "property", "set", "-f", "-ts", str(path), "ro", "false"],
         check=True,
@@ -509,14 +510,6 @@ def _set_subvolume_writable(path: Path) -> None:
         capture_output=True,
         env=env,
     )
-
-
-def _ensure_sbin_on_path(path: str) -> str:
-    parts = [entry for entry in path.split(os.pathsep) if entry]
-    for entry in ("/usr/sbin", "/sbin"):
-        if entry not in parts:
-            parts.append(entry)
-    return os.pathsep.join(parts)
 
 
 def _select_sample(paths: list[str], sample_max_files: int) -> list[str]:
@@ -537,14 +530,6 @@ def _hash_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
                 break
             hasher.update(chunk)
     return hasher.hexdigest()
-
-
-def _ensure_sbin_on_path(path: str) -> str:
-    parts = [entry for entry in path.split(os.pathsep) if entry]
-    for entry in ("/usr/sbin", "/sbin"):
-        if entry not in parts:
-            parts.append(entry)
-    return os.pathsep.join(parts)
 
 
 def _parse_uuid(output: str) -> str | None:

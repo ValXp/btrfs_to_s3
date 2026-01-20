@@ -36,6 +36,7 @@ from btrfs_to_s3.streamer import cleanup_btrfs_send, open_btrfs_send
 from btrfs_to_s3.state import State, SubvolumeState, load_state, save_state
 from btrfs_to_s3.uploader import MAX_PART_SIZE, S3Uploader
 from btrfs_to_s3.metrics import calculate_metrics, format_throughput
+from btrfs_to_s3.path_utils import ensure_sbin_on_path
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
@@ -450,7 +451,7 @@ def _filter_plan_items(
 class _ShellRunner:
     def run(self, args: list[str]) -> None:
         env = os.environ.copy()
-        env["PATH"] = _ensure_sbin_on_path(env.get("PATH", ""))
+        env["PATH"] = ensure_sbin_on_path(env.get("PATH", ""))
         subprocess.run(
             args,
             check=True,
@@ -513,14 +514,6 @@ def _parse_level(value: str) -> int:
     if normalized not in mapping:
         raise ConfigError(f"invalid log level: {value}")
     return mapping[normalized]
-
-
-def _ensure_sbin_on_path(path: str) -> str:
-    parts = [entry for entry in path.split(os.pathsep) if entry]
-    for entry in ("/usr/sbin", "/sbin"):
-        if entry not in parts:
-            parts.append(entry)
-    return os.pathsep.join(parts)
 
 
 def run_restore(args: argparse.Namespace, config: Config) -> int:

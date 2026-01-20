@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -287,6 +288,25 @@ class RestoreTests(unittest.TestCase):
 
 
 class RestoreVerifyTests(unittest.TestCase):
+    def test_verify_metadata_uses_sbin_on_path(self) -> None:
+        with tempfile.TemporaryDirectory() as target_dir:
+            target_path = Path(target_dir)
+            captured: dict[str, str] = {}
+
+            def runner(*args, **kwargs):
+                captured["path"] = kwargs["env"]["PATH"]
+                return subprocess.CompletedProcess(
+                    args[0],
+                    0,
+                    stdout="UUID: 11111111-2222-3333-4444-555555555555\n",
+                    stderr="",
+                )
+
+            with mock.patch.dict(os.environ, {"PATH": "/bin"}):
+                restore.verify_metadata(target_path, runner=runner)
+            self.assertIn("/usr/sbin", captured["path"])
+            self.assertIn("/sbin", captured["path"])
+
     def test_verify_metadata_requires_uuid(self) -> None:
         with tempfile.TemporaryDirectory() as target_dir:
             target_path = Path(target_dir)
