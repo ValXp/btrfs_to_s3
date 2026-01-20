@@ -34,3 +34,4 @@ Learnings
 - FYI: restore_chain unit tests should mock _set_subvolume_writable when running without btrfs to avoid subprocess failures.
 
 - FYI: Streamer tests mock subprocess.Popen to exercise open_btrfs_send without btrfs.
+- FYI: upload_stream uses threshold = max(multipart_threshold, MIN_PART_SIZE), so multipart coverage needs payloads > 5 MiB.

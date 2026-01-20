@@ -43,6 +43,101 @@ class FakeClient:
 
 
 class UploaderTests(unittest.TestCase):
+    def test_upload_stream_empty_uses_put_object(self) -> None:
+        class RecordingClient(FakeClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.payload = None
+
+            def put_object(self, **kwargs):
+                body = kwargs["Body"]
+                self.payload = body.read()
+                self.calls.append(("put_object", kwargs))
+                return {"ETag": "etag-put"}
+
+        client = RecordingClient()
+        uploader = S3Uploader(
+            client=client,
+            bucket="bucket",
+            storage_class="STANDARD",
+            sse="AES256",
+            multipart_threshold=50,
+            retry_policy=RetryPolicy(sleep=lambda _: None, jitter=lambda d: d),
+        )
+        result = uploader.upload_stream("key", io.BytesIO(b""))
+        self.assertEqual(result.size, 0)
+        self.assertEqual(client.payload, b"")
+        self.assertTrue(any(call[0] == "put_object" for call in client.calls))
+
+    def test_upload_stream_small_uses_put_object(self) -> None:
+        class RecordingClient(FakeClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.payload = None
+
+            def put_object(self, **kwargs):
+                body = kwargs["Body"]
+                self.payload = body.read()
+                self.calls.append(("put_object", kwargs))
+                return {"ETag": "etag-put"}
+
+        client = RecordingClient()
+        uploader = S3Uploader(
+            client=client,
+            bucket="bucket",
+            storage_class="STANDARD",
+            sse="AES256",
+            multipart_threshold=50,
+            retry_policy=RetryPolicy(sleep=lambda _: None, jitter=lambda d: d),
+        )
+        payload = b"small-payload"
+        result = uploader.upload_stream("key", io.BytesIO(payload))
+        self.assertEqual(result.size, len(payload))
+        self.assertEqual(client.payload, payload)
+        self.assertTrue(any(call[0] == "put_object" for call in client.calls))
+
+    def test_upload_stream_large_uses_multipart(self) -> None:
+        client = FakeClient()
+        payload = b"a" * (5 * 1024 * 1024 + 1)
+        uploader = S3Uploader(
+            client=client,
+            bucket="bucket",
+            storage_class="STANDARD",
+            sse="AES256",
+            part_size=5 * 1024 * 1024,
+            multipart_threshold=5 * 1024 * 1024,
+            retry_policy=RetryPolicy(sleep=lambda _: None, jitter=lambda d: d),
+        )
+        result = uploader.upload_stream("key", io.BytesIO(payload))
+        self.assertEqual(result.size, len(payload))
+        upload_calls = [call for call in client.calls if call[0] == "upload_part"]
+        sizes = [len(call[1]["Body"]) for call in upload_calls]
+        self.assertEqual(sizes, [5 * 1024 * 1024, 1])
+
+    def test_spooled_parts_require_dir(self) -> None:
+        uploader = S3Uploader(
+            client=FakeClient(),
+            bucket="bucket",
+            storage_class="STANDARD",
+            sse="AES256",
+            retry_policy=RetryPolicy(sleep=lambda _: None, jitter=lambda d: d),
+        )
+        with self.assertRaises(UploadError):
+            next(uploader._iter_spooled_parts(io.BytesIO(b""), b"", 5, None))
+
+    def test_spool_limits_in_flight_parts(self) -> None:
+        uploader = S3Uploader(
+            client=FakeClient(),
+            bucket="bucket",
+            storage_class="STANDARD",
+            sse="AES256",
+            concurrency=4,
+            spool_dir=Path("spool"),
+            spool_size_bytes=9,
+            retry_policy=RetryPolicy(sleep=lambda _: None, jitter=lambda d: d),
+        )
+        self.assertEqual(uploader._max_in_flight_parts(5, use_spool=True), 1)
+
     def test_multipart_retries_then_succeeds(self) -> None:
         client = FakeClient(failures=2)
         policy = RetryPolicy(max_attempts=5, sleep=lambda _: None, jitter=lambda d: d)
