@@ -201,20 +201,28 @@ class S3Uploader:
                 self.retry_policy.sleep(self.retry_policy.jitter(delay))
 
     def _put_object_stream(self, key: str, stream: BinaryIO) -> UploadResult:
-        size = 0
-        while True:
-            chunk = stream.read(64 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-        stream.seek(0)
-        response = self.client.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=stream,
-            StorageClass=self.storage_class,
-            ServerSideEncryption=self.sse,
-        )
+        close_body = False
+        if getattr(stream, "seekable", None) and stream.seekable():
+            size = self._copy_stream(stream)
+            stream.seek(0)
+            body = stream
+        else:
+            temp = tempfile.TemporaryFile()
+            size = self._copy_stream(stream, temp)
+            temp.seek(0)
+            body = temp
+            close_body = True
+        try:
+            response = self.client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=body,
+                StorageClass=self.storage_class,
+                ServerSideEncryption=self.sse,
+            )
+        finally:
+            if close_body:
+                body.close()
         return UploadResult(key=key, size=size, etag=response.get("ETag"))
 
     def _effective_part_size(self, part_size: int | None = None) -> int:
@@ -230,6 +238,19 @@ class S3Uploader:
                 break
             buffer.extend(data)
         return bytes(buffer)
+
+    def _copy_stream(
+        self, stream: BinaryIO, destination: BinaryIO | None = None
+    ) -> int:
+        size = 0
+        while True:
+            chunk = stream.read(64 * 1024)
+            if not chunk:
+                break
+            if destination is not None:
+                destination.write(chunk)
+            size += len(chunk)
+        return size
 
     def _iter_parts(
         self, stream: BinaryIO, initial: bytes, part_size: int

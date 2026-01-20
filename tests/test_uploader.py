@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
 from unittest import mock
@@ -100,6 +101,42 @@ class UploaderTests(unittest.TestCase):
         args = put_calls[0][1]
         self.assertEqual(args["ServerSideEncryption"], "AES256")
         self.assertEqual(args["StorageClass"], "STANDARD")
+
+    def test_put_object_stream_handles_non_seekable(self) -> None:
+        class NonSeekableStream:
+            def __init__(self, payload: bytes) -> None:
+                self._buffer = io.BytesIO(payload)
+
+            def read(self, size: int = -1) -> bytes:
+                return self._buffer.read(size)
+
+            def seekable(self) -> bool:
+                return False
+
+        class RecordingClient:
+            def __init__(self) -> None:
+                self.payload = None
+
+            def put_object(self, **kwargs):
+                body = kwargs["Body"]
+                self.payload = body.read()
+                return {"ETag": "etag"}
+
+        client = RecordingClient()
+        uploader = S3Uploader(
+            client=client,
+            bucket="bucket",
+            storage_class="STANDARD",
+            sse="AES256",
+            multipart_threshold=50,
+            retry_policy=RetryPolicy(sleep=lambda _: None, jitter=lambda d: d),
+        )
+        payload = b"non-seekable"
+        result = uploader._put_object_stream(
+            "key", NonSeekableStream(payload)
+        )
+        self.assertEqual(result.size, len(payload))
+        self.assertEqual(client.payload, payload)
 
     def test_multipart_part_size_is_capped(self) -> None:
         client = FakeClient()
