@@ -107,3 +107,47 @@
 - Acceptance criteria:
   - All config keys in the example/config schema are described in README.
   - Each description includes defaults and any constraints/side effects.
+
+### Task 12: Backup upload failure cleanup
+- Scope: `btrfs_to_s3/cli.py`, `btrfs_to_s3/streamer.py`.
+- Catch upload/streaming exceptions, terminate `btrfs send` cleanly, and avoid masking the original error.
+- Acceptance criteria:
+  - On upload or streaming failure, the `btrfs send` process is terminated/cleaned and waited on.
+  - Error logs include the original failure context plus any `btrfs send` stderr if available.
+  - Backup exits with a non-zero status without masking the root exception.
+  - Unit tests cover upload/stream failure paths and `btrfs send` cleanup behavior with >= 90% coverage where reasonable.
+
+### Task 13: Restore error cleanup for btrfs receive
+- Scope: `btrfs_to_s3/restore.py`.
+- Ensure `btrfs receive` is terminated and waited on when chunk download/verification fails.
+- Acceptance criteria:
+  - On chunk download/verification failure, the `btrfs receive` process is terminated and waited on.
+  - Restore errors include `btrfs receive` stderr when available.
+  - No orphaned `btrfs receive` processes remain after failure.
+  - Unit tests cover restore failure cleanup and error reporting with >= 90% coverage where reasonable.
+
+### Task 14: Shared path helper for sbin PATH
+- Scope: `btrfs_to_s3/cli.py`, `btrfs_to_s3/restore.py`.
+- Deduplicate `_ensure_sbin_on_path` into a shared helper and update call sites.
+- Acceptance criteria:
+  - Only one implementation of the sbin PATH helper exists in the codebase.
+  - All callers use the shared helper.
+  - Tests continue to pass with no behavior change.
+  - Unit tests cover the shared helper behavior in at least one call site with >= 90% coverage where reasonable.
+
+### Task 15: Seekless upload stream handling
+- Scope: `btrfs_to_s3/uploader.py`.
+- Avoid relying on `seek(0)` for non-seekable streams in `_put_object_stream` or add a safe fallback.
+- Acceptance criteria:
+  - Uploading a non-seekable stream does not raise due to `seek`.
+  - Stream upload still reports correct size and ETag.
+  - Unit test covers non-seekable stream handling with >= 90% coverage where reasonable.
+
+### Task 16: Extract backup orchestration into dedicated classes
+- Scope: `btrfs_to_s3/cli.py`, new module(s) under `btrfs_to_s3/`.
+- Move backup business logic out of the CLI into dedicated orchestration/service class(es); keep CLI limited to argument parsing, config loading, and invoking the orchestration layer.
+- Acceptance criteria:
+  - CLI layer only wires inputs/outputs and delegates to orchestration class(es).
+  - Backup orchestration is in new class(es) with clear responsibilities (planning, snapshotting, upload, manifest/state).
+  - Behavior remains unchanged (logs, exit codes, outputs) and tests updated accordingly.
+  - Unit tests cover the orchestration class(es) entry points and major flows with >= 90% coverage where reasonable.
