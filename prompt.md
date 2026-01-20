@@ -2,7 +2,7 @@ Agent Instructions
 
 Loop behavior
 - Read `tasks.md` and `progress.md` and `learnings.md`.
-- Work on the first task that is not yet completed.
+- Work on the first task that is not yet completed. Never do more than one task.
 - Append any findings (errors, gotchas, FYIs) to `learnings.md`.
 - Upon task completion, make a commit of the changes you made and push them.
 - Ensure all `.md` files are committed as well.

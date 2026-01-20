@@ -152,3 +152,66 @@
   - Methods over 30 lines of code should be considered for breaking down, methods over 40 lines of code MUST be broken down.
   - Behavior remains unchanged (logs, exit codes, outputs) and tests updated accordingly.
   - Unit tests cover the orchestration class(es) entry points and major flows with >= 90% coverage where reasonable.
+
+### Task 17: Coverage uplift for cli.py
+- Scope: `btrfs_to_s3/cli.py`.
+- Add unit tests to bring coverage to >= 90% where reasonable.
+- Acceptance criteria:
+  - Coverage for `btrfs_to_s3/cli.py` is >= 90% where reasonable.
+  - Coverage is computed via:
+    - `.venv/bin/python -m coverage run -m pytest`
+    - `.venv/bin/python -m coverage report -m`
+
+### Task 18: Coverage uplift for config.py
+- Scope: `btrfs_to_s3/config.py`.
+- Add unit tests to bring coverage to >= 90% where reasonable.
+- Acceptance criteria:
+  - Coverage for `btrfs_to_s3/config.py` is >= 90% where reasonable.
+  - Coverage is computed via:
+    - `.venv/bin/python -m coverage run -m pytest`
+    - `.venv/bin/python -m coverage report -m`
+
+### Task 19: Coverage uplift for lock.py
+- Scope: `btrfs_to_s3/lock.py`.
+- Add unit tests to bring coverage to >= 90% where reasonable.
+- Acceptance criteria:
+  - Coverage for `btrfs_to_s3/lock.py` is >= 90% where reasonable.
+  - Coverage is computed via:
+    - `.venv/bin/python -m coverage run -m pytest`
+    - `.venv/bin/python -m coverage report -m`
+
+### Task 20: Coverage uplift for orchestrator.py
+- Scope: `btrfs_to_s3/orchestrator.py`.
+- Add unit tests to bring coverage to >= 90% where reasonable.
+- Acceptance criteria:
+  - Coverage for `btrfs_to_s3/orchestrator.py` is >= 90% where reasonable.
+  - Coverage is computed via:
+    - `.venv/bin/python -m coverage run -m pytest`
+    - `.venv/bin/python -m coverage report -m`
+
+### Task 21: Coverage uplift for restore.py
+- Scope: `btrfs_to_s3/restore.py`.
+- Add unit tests to bring coverage to >= 90% where reasonable.
+- Acceptance criteria:
+  - Coverage for `btrfs_to_s3/restore.py` is >= 90% where reasonable.
+  - Coverage is computed via:
+    - `.venv/bin/python -m coverage run -m pytest`
+    - `.venv/bin/python -m coverage report -m`
+
+### Task 22: Coverage uplift for streamer.py
+- Scope: `btrfs_to_s3/streamer.py`.
+- Add unit tests to bring coverage to >= 90% where reasonable.
+- Acceptance criteria:
+  - Coverage for `btrfs_to_s3/streamer.py` is >= 90% where reasonable.
+  - Coverage is computed via:
+    - `.venv/bin/python -m coverage run -m pytest`
+    - `.venv/bin/python -m coverage report -m`
+
+### Task 23: Coverage uplift for uploader.py
+- Scope: `btrfs_to_s3/uploader.py`.
+- Add unit tests to bring coverage to >= 90% where reasonable.
+- Acceptance criteria:
+  - Coverage for `btrfs_to_s3/uploader.py` is >= 90% where reasonable.
+  - Coverage is computed via:
+    - `.venv/bin/python -m coverage run -m pytest`
+    - `.venv/bin/python -m coverage report -m`

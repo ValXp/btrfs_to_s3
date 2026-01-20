@@ -4,6 +4,7 @@ Learnings
 - FYI: `python` is not available in the current shell; use `python3` when running harness commands.
 - FYI: `rg` is not installed in this environment; use `find`/`grep` as fallback.
 - FYI: `pytest` is not available in this environment, so a minimal local `pytest` shim runs `unittest` discovery for `python3 -m pytest`.
+- FYI: Coverage is run via `.venv/bin/python -m coverage run -m pytest` followed by `.venv/bin/python -m coverage report -m` (set up with `python3 -m venv .venv` and `.venv/bin/python -m pip install coverage`).
 - FYI: `integration_tests/scripts/setup_btrfs.py` currently fails because `losetup` is missing in the environment.
 - FYI: The harness now generates a tool config at integration_tests/run/tool_config.toml and exports BTRFS_TO_S3_HARNESS_RUN_DIR when running the CLI.
 - FYI: AWS uploads require credentials; this environment needed python3-boto3 installed via apt (pip is blocked by PEP 668).
