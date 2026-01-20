@@ -149,5 +149,6 @@
 - Acceptance criteria:
   - CLI layer only wires inputs/outputs and delegates to orchestration class(es).
   - Backup orchestration is in new class(es) with clear responsibilities (planning, snapshotting, upload, manifest/state).
+  - Methods over 30 lines of code should be considered for breaking down, methods over 40 lines of code MUST be broken down.
   - Behavior remains unchanged (logs, exit codes, outputs) and tests updated accordingly.
   - Unit tests cover the orchestration class(es) entry points and major flows with >= 90% coverage where reasonable.
