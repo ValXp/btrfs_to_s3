@@ -31,3 +31,4 @@ Learnings
 - FYI: CLI now lazy-loads boto3 via _get_s3_client so tests can import without boto3 installed.
 
 - FYI: Added orchestrator unit tests to reach 100% coverage for btrfs_to_s3/orchestrator.py.
+- FYI: restore_chain unit tests should mock _set_subvolume_writable when running without btrfs to avoid subprocess failures.
