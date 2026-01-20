@@ -32,3 +32,5 @@ Learnings
 
 - FYI: Added orchestrator unit tests to reach 100% coverage for btrfs_to_s3/orchestrator.py.
 - FYI: restore_chain unit tests should mock _set_subvolume_writable when running without btrfs to avoid subprocess failures.
+
+- FYI: Streamer tests mock subprocess.Popen to exercise open_btrfs_send without btrfs.

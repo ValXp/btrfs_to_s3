@@ -5,8 +5,10 @@ from __future__ import annotations
 import io
 import subprocess
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from btrfs_to_s3.streamer import cleanup_btrfs_send
+from btrfs_to_s3.streamer import BtrfsSendProcess, StreamError, cleanup_btrfs_send, open_btrfs_send
 
 
 class StreamerCleanupTests(unittest.TestCase):
@@ -69,6 +71,33 @@ class StreamerCleanupTests(unittest.TestCase):
         self.assertTrue(process.terminated)
         self.assertTrue(process.killed)
         self.assertEqual(error, "forced stderr")
+
+
+class StreamerOpenTests(unittest.TestCase):
+    def test_open_btrfs_send_builds_incremental_args(self) -> None:
+        stdout = io.BytesIO(b"stream")
+        process = mock.Mock()
+        process.stdout = stdout
+        with mock.patch("btrfs_to_s3.streamer.subprocess.Popen") as popen:
+            popen.return_value = process
+            result = open_btrfs_send(Path("/snapshots/child"), parent_snapshot=Path("/snapshots/parent"))
+
+        popen.assert_called_once_with(
+            ["btrfs", "send", "-p", "/snapshots/parent", "/snapshots/child"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result, BtrfsSendProcess(process=process, stdout=stdout))
+
+    def test_open_btrfs_send_raises_without_stdout(self) -> None:
+        process = mock.Mock()
+        process.stdout = None
+        with mock.patch("btrfs_to_s3.streamer.subprocess.Popen") as popen:
+            popen.return_value = process
+            with self.assertRaises(StreamError):
+                open_btrfs_send(Path("/snapshots/child"))
+
+        process.kill.assert_called_once_with()
 
 
 if __name__ == "__main__":
