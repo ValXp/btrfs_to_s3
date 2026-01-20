@@ -361,18 +361,48 @@ def _apply_manifest_stream(
     proc = subprocess.Popen(
         ["btrfs", "receive", str(receive_dir)],
         stdin=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
     assert proc.stdin is not None
+    stream_error: Exception | None = None
     try:
         bytes_written = download_and_verify_chunks(
             client, bucket, manifest.chunks, proc.stdin
         )
+    except Exception as exc:
+        stream_error = exc
     finally:
         proc.stdin.close()
-    code = proc.wait()
+        if stream_error is not None:
+            stderr = _cleanup_btrfs_receive(proc)
+            message = f"restore stream failed: {stream_error}"
+            if stderr:
+                message = f"{message}; btrfs receive error: {stderr}"
+            raise RestoreError(message) from stream_error
+    _stdout, stderr = proc.communicate()
+    code = proc.returncode
     if code != 0:
+        error = stderr.decode("utf-8", errors="replace").strip()
+        if error:
+            raise RestoreError(
+                f"btrfs receive failed with exit code {code}: {error}"
+            )
         raise RestoreError(f"btrfs receive failed with exit code {code}")
     return receive_dir / subvol_name, bytes_written
+
+
+def _cleanup_btrfs_receive(
+    process: subprocess.Popen[bytes],
+    timeout: float = 5.0,
+) -> str:
+    try:
+        if process.poll() is None:
+            process.terminate()
+        _stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        _stdout, stderr = process.communicate()
+    return stderr.decode("utf-8", errors="replace").strip()
 
 
 def _fetch_json(client, bucket: str, key: str) -> dict[str, Any]:

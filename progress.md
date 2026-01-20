@@ -49,3 +49,4 @@
 - 2026-01-18 15:43 MST: Completed Task 10 log throughput metrics; commit "Log backup and restore metrics".
 - 2026-01-18 15:46 MST: Completed Task 11 config documentation; commit "Document config parameters".
 - 2026-01-19 20:09 MST: Completed Task 12 backup upload failure cleanup; commit "Handle btrfs send cleanup on upload failure".
+- 2026-01-19 20:11 MST: Completed Task 13 restore error cleanup; commit "Cleanup btrfs receive on restore failure".

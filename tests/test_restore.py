@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from btrfs_to_s3 import restore
 
@@ -198,6 +199,91 @@ class RestoreTests(unittest.TestCase):
         self.assertEqual(total_bytes, len(payload))
         self.assertTrue(all(size == 4 for size in body.read_sizes))
         self.assertGreater(len(body.read_sizes), 2)
+
+    def test_stream_failure_cleans_up_receive(self) -> None:
+        client = FakeS3()
+        manifest = restore.ManifestInfo(
+            key="manifest.json",
+            kind="full",
+            parent_manifest=None,
+            chunks=(restore.ChunkInfo(key="chunk.bin", sha256="x", size=None),),
+            s3={},
+            snapshot_path="/snapshots/data__20260101T000000Z__full",
+        )
+
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.stdin = io.BytesIO()
+                self.terminated = False
+                self.killed = False
+                self._poll = None
+                self.returncode = None
+
+            def poll(self):
+                return self._poll
+
+            def terminate(self) -> None:
+                self.terminated = True
+                self._poll = 0
+                self.returncode = 0
+
+            def kill(self) -> None:
+                self.killed = True
+                self._poll = 0
+                self.returncode = 0
+
+            def communicate(self, timeout: float | None = None):
+                return b"", b"receive failed"
+
+        proc = FakeProcess()
+
+        with mock.patch(
+            "btrfs_to_s3.restore.subprocess.Popen", return_value=proc
+        ), mock.patch(
+            "btrfs_to_s3.restore.download_and_verify_chunks",
+            side_effect=restore.RestoreError("bad chunk"),
+        ):
+            with self.assertRaises(restore.RestoreError) as context:
+                restore._apply_manifest_stream(
+                    client, "bucket", manifest, Path("/tmp")
+                )
+        self.assertTrue(proc.terminated)
+        self.assertIn("restore stream failed", str(context.exception))
+        self.assertIn("receive failed", str(context.exception))
+
+    def test_receive_exit_includes_stderr(self) -> None:
+        client = FakeS3()
+        manifest = restore.ManifestInfo(
+            key="manifest.json",
+            kind="full",
+            parent_manifest=None,
+            chunks=(restore.ChunkInfo(key="chunk.bin", sha256="x", size=None),),
+            s3={},
+            snapshot_path="/snapshots/data__20260101T000000Z__full",
+        )
+
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.stdin = io.BytesIO()
+                self.returncode = 2
+
+            def communicate(self, timeout: float | None = None):
+                return b"", b"receive stderr"
+
+        proc = FakeProcess()
+
+        with mock.patch(
+            "btrfs_to_s3.restore.subprocess.Popen", return_value=proc
+        ), mock.patch(
+            "btrfs_to_s3.restore.download_and_verify_chunks",
+            return_value=0,
+        ):
+            with self.assertRaises(restore.RestoreError) as context:
+                restore._apply_manifest_stream(
+                    client, "bucket", manifest, Path("/tmp")
+                )
+        self.assertIn("exit code 2", str(context.exception))
+        self.assertIn("receive stderr", str(context.exception))
 
 
 class RestoreVerifyTests(unittest.TestCase):
