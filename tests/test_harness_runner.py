@@ -85,7 +85,44 @@ class RunAllTests(unittest.TestCase):
         self.assertIn(("verify_restore", "verify_restore.py", []), steps)
         self.assertEqual(teardown, ("teardown", "teardown_btrfs.py", []))
 
-    def test_main_runs_zfs_probe_flow_and_teardown(self) -> None:
+    def test_build_steps_uses_application_backed_zfs_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+
+            steps, teardown = run_all._build_steps(config, skip_s3=False)
+
+        self.assertEqual(
+            steps,
+            [
+                ("setup", "setup_zfs.py", []),
+                ("seed", "seed_data.py", []),
+                ("full", "run_full.py", []),
+                ("mutate", "mutate_data.py", []),
+                ("incremental", "run_incremental.py", ["--skip-mutate"]),
+                ("interrupt", "run_interrupt.py", []),
+                ("restore", "run_restore.py", ["--source", "all"]),
+                ("verify_restore", "verify_restore.py", ["--source", "all"]),
+            ],
+        )
+        self.assertEqual(teardown, ("teardown", "teardown_zfs.py", []))
+
+    def test_build_steps_zfs_skip_s3_keeps_local_fixture_steps_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+
+            steps, teardown = run_all._build_steps(config, skip_s3=True)
+
+        self.assertEqual(
+            steps,
+            [
+                ("setup", "setup_zfs.py", []),
+                ("seed", "seed_data.py", []),
+                ("mutate", "mutate_data.py", []),
+            ],
+        )
+        self.assertEqual(teardown, ("teardown", "teardown_zfs.py", []))
+
+    def test_main_runs_zfs_application_flow_and_teardown(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _zfs_config(tmpdir)
             log = RecordingLog()
@@ -128,16 +165,68 @@ class RunAllTests(unittest.TestCase):
             calls,
             [
                 ("setup", "setup_zfs.py", [], False),
-                (
-                    "snapshot_send_receive",
-                    "run_zfs_snapshot_send_receive.py",
-                    [],
-                    False,
-                ),
-                ("incremental", "run_zfs_incremental.py", [], False),
-                ("retention", "run_zfs_retention.py", [], False),
+                ("seed", "seed_data.py", [], False),
+                ("full", "run_full.py", [], False),
+                ("mutate", "mutate_data.py", [], False),
+                ("incremental", "run_incremental.py", ["--skip-mutate"], False),
+                ("interrupt", "run_interrupt.py", [], False),
+                ("restore", "run_restore.py", ["--source", "all"], False),
+                ("verify_restore", "verify_restore.py", ["--source", "all"], False),
                 ("teardown", "teardown_zfs.py", [], True),
             ],
+        )
+
+    def test_main_warns_that_skip_s3_skips_zfs_application_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            log = RecordingLog()
+            calls: list[str] = []
+
+            def fake_run_step(
+                name: str,
+                script: str,
+                config_path: str,
+                extra_args: list[str],
+                log_obj,
+                *,
+                allow_failure: bool = False,
+            ) -> bool:
+                del script, config_path, extra_args, log_obj, allow_failure
+                calls.append(name)
+                return True
+
+            with mock.patch.object(
+                run_all,
+                "load_config",
+                return_value=config,
+            ), mock.patch.object(
+                run_all,
+                "open_log",
+                return_value=log,
+            ), mock.patch.object(
+                run_all,
+                "_run_step",
+                side_effect=fake_run_step,
+            ), mock.patch.object(
+                run_all.sys,
+                "argv",
+                [
+                    "run_all.py",
+                    "--config",
+                    str(Path(tmpdir) / "test_zfs.toml"),
+                    "--skip-s3",
+                ],
+            ):
+                result = run_all.main()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, ["setup", "seed", "mutate", "teardown"])
+        self.assertIn(
+            (
+                "WARN",
+                "--skip-s3 skips the application-backed ZFS backup/restore steps",
+            ),
+            log.entries,
         )
 
     def test_main_skips_large_scenario_for_zfs_backend(self) -> None:

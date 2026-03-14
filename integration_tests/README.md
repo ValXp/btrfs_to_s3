@@ -1,10 +1,10 @@
 # btrfs_to_s3 test harness
 
 This directory contains a Python-first harness for disposable Btrfs and ZFS
-fixtures plus AWS S3 test runs. The Btrfs path exercises the main
-`python -m btrfs_to_s3` flow. The ZFS path currently uses standalone
-send/receive probe scripts against a disposable file-backed pool, while still
-rendering a backend-aware tool config under `integration_tests/run/`.
+fixtures plus AWS S3 test runs. The Btrfs path and the default ZFS
+`run_all.py` path both exercise the main `python -m btrfs_to_s3` flow.
+Standalone ZFS send/receive/retention probes remain available for low-level
+diagnostics against the disposable file-backed pool.
 All runtime artifacts are created under `integration_tests/run/` (generated).
 
 Prerequisites
@@ -58,18 +58,16 @@ How the ZFS harness differs
   names, not Btrfs path keys. Source definitions live in `[zfs]`, and mounts are
   derived from `mount_root` instead of `paths.mount_dir`.
 - `integration_tests/scripts/run_all.py` dispatches setup/teardown from
-  `[filesystem].backend`. For ZFS configs it runs the standalone probe sequence
-  (`run_zfs_snapshot_send_receive.py`, `run_zfs_incremental.py`,
-  `run_zfs_retention.py`) instead of the main application flow.
-- The main application now has a ZFS backend, and the generic application
-  scripts are backend-aware for manual ZFS runs:
-  `run_full.py`, `run_incremental.py`, `run_interrupt.py`, `run_restore.py`,
-  and `verify_restore.py` all accept `--config integration_tests/config/test_zfs.toml`
-  and invoke `python -m btrfs_to_s3` through `integration_tests/harness/runner.py`.
-- `run_all.py` still keeps the ZFS path focused on raw probe coverage for now.
-  Live application-backed ZFS validation remains a separate host-level step
-  because it needs a real ZFS kernel environment, AWS access, and extra
-  privileges.
+  `[filesystem].backend`. For ZFS configs it now runs the application-backed
+  sequence: `seed_data.py`, `run_full.py`, `mutate_data.py`,
+  `run_incremental.py --skip-mutate`, `run_interrupt.py`,
+  `run_restore.py --source all`, and `verify_restore.py --source all`.
+- The standalone ZFS probe scripts (`run_zfs_snapshot_send_receive.py`,
+  `run_zfs_incremental.py`, `run_zfs_retention.py`) are still available, but
+  they are now manual diagnostics instead of the only ZFS path in `run_all.py`.
+- ZFS retention remains a standalone probe for now because
+  `verify_retention.py` is still Btrfs-specific; `run_all.py` focuses on the
+  application-backed backup/restore flow.
 
 BTRFS_TO_S3_CMD override
 - Optional: set `BTRFS_TO_S3_CMD` in `integration_tests/config/test.env` as a JSON array.
@@ -82,7 +80,7 @@ Quickstart
    - `integration_tests/.venv/bin/pip install -r integration_tests/requirements.txt`
 2. Edit the config you plan to run:
    - Btrfs: `integration_tests/config/test.toml`
-   - ZFS probes: `integration_tests/config/test_zfs.toml`
+   - ZFS application flow: `integration_tests/config/test_zfs.toml`
    - Shared credentials/env: `integration_tests/config/test.env`
 3. Load AWS credentials (so sudo preserves them):
    - `set -a; . integration_tests/config/test.env; set +a`
@@ -90,10 +88,13 @@ Quickstart
    - `sudo -E python3 integration_tests/scripts/run_all.py --config integration_tests/config/test.toml`
    - Optional: add `--skip-s3` to run local Btrfs setup/seed/mutate without S3.
    - Optional: add `--include-large` to run the Btrfs multi-chunk scenario.
-5. Run the ZFS probe harness (setup + probes + teardown):
+5. Run the ZFS application-backed harness:
    - `sudo -E python3 integration_tests/scripts/run_all.py --config integration_tests/config/test_zfs.toml`
-   - `--skip-s3` has no effect on the ZFS probe flow.
-6. Run the ZFS application-backed flow manually (scripts use the harness runner):
+   - This runs setup, seed, full backup, mutate, incremental backup,
+     interrupt/retry, restore, verify_restore, and teardown.
+   - `--skip-s3` reduces the ZFS run to setup, seed, mutate, and teardown when
+     you only want to validate the disposable fixture without AWS.
+6. Run individual ZFS application-backed steps manually (scripts use the harness runner):
    - `sudo -E python3 integration_tests/scripts/setup_zfs.py --config integration_tests/config/test_zfs.toml`
    - `python3 integration_tests/scripts/seed_data.py --config integration_tests/config/test_zfs.toml`
    - `python3 integration_tests/scripts/run_full.py --config integration_tests/config/test_zfs.toml`
@@ -102,10 +103,15 @@ Quickstart
    - `python3 integration_tests/scripts/run_restore.py --config integration_tests/config/test_zfs.toml --source tank/data`
    - `python3 integration_tests/scripts/verify_restore.py --config integration_tests/config/test_zfs.toml --source tank/data`
    - `sudo -E python3 integration_tests/scripts/teardown_zfs.py --config integration_tests/config/test_zfs.toml`
-7. Run the multi-chunk scenario:
+7. Run the standalone ZFS probe scripts manually when you need raw send/receive
+   or retention diagnostics outside the application flow:
+   - `python3 integration_tests/scripts/run_zfs_snapshot_send_receive.py --config integration_tests/config/test_zfs.toml`
+   - `python3 integration_tests/scripts/run_zfs_incremental.py --config integration_tests/config/test_zfs.toml`
+   - `python3 integration_tests/scripts/run_zfs_retention.py --config integration_tests/config/test_zfs.toml`
+8. Run the multi-chunk scenario:
    - `sudo -E python3 integration_tests/scripts/run_large.py --config integration_tests/config/test_large.toml`
    - `--include-large` is only defined for the Btrfs harness right now.
-8. Run the archive restore checks (optional):
+9. Run the archive restore checks (optional):
    - `sudo -E python3 integration_tests/scripts/run_restore_archive.py --config integration_tests/config/test_archive.toml`
 
 Clearing logs between runs

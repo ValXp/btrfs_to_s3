@@ -54,7 +54,10 @@ def main() -> int:
     with open_log(log_path) as log:
         log.write(f"loading config from {config_path}")
         if backend == "zfs" and args.skip_s3:
-            log.write("--skip-s3 has no effect for the ZFS probe flow", level="WARN")
+            log.write(
+                "--skip-s3 skips the application-backed ZFS backup/restore steps",
+                level="WARN",
+            )
         try:
             for name, script, extra_args in steps:
                 if not _run_step(name, script, config_path, extra_args, log):
@@ -127,15 +130,21 @@ def _build_steps(
             )
         return steps, ("teardown", teardown_script, [])
     if backend == "zfs":
-        return (
-            [
-                ("setup", setup_script, []),
-                ("snapshot_send_receive", "run_zfs_snapshot_send_receive.py", []),
-                ("incremental", "run_zfs_incremental.py", []),
-                ("retention", "run_zfs_retention.py", []),
-            ],
-            ("teardown", teardown_script, []),
-        )
+        steps = [("setup", setup_script, []), ("seed", "seed_data.py", [])]
+        if skip_s3:
+            steps.append(("mutate", "mutate_data.py", []))
+        else:
+            steps.extend(
+                [
+                    ("full", "run_full.py", []),
+                    ("mutate", "mutate_data.py", []),
+                    ("incremental", "run_incremental.py", ["--skip-mutate"]),
+                    ("interrupt", "run_interrupt.py", []),
+                    ("restore", "run_restore.py", ["--source", "all"]),
+                    ("verify_restore", "verify_restore.py", ["--source", "all"]),
+                ]
+            )
+        return steps, ("teardown", teardown_script, [])
     raise ValueError(f"unsupported backend {backend!r}")
 
 

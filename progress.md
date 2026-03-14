@@ -79,3 +79,4 @@
 - 2026-03-14 08:21 MDT: Added Task 38-41 to cover the remaining post-audit gaps (application-backed ZFS harness flow, ZFS restore content verification, and compatibility-boundary cleanup), marked Task 37 as a blocked external dependency, and updated task metadata so the work loop can continue past the live AWS gate.
 - 2026-03-14 08:36 MDT: Created ignored `integration_tests/config/test.env` from `/root/btrfs_to_s3_s3.secrets`, verified boto3 resolves env credentials locally, and confirmed the keys with `aws sts get-caller-identity` for `arn:aws:iam::022683771292:user/btrfs_to_s3`.
 - 2026-03-14 08:52 MDT: Completed Task 38 application-backed ZFS harness scripts; commit "Cover ZFS application harness scripts".
+- 2026-03-14 09:00 MDT: Completed Task 39 route `run_all.py` through the ZFS application flow; commit "Route ZFS harness through application flow".

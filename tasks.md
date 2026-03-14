@@ -388,6 +388,7 @@
   - No test in this task requires a live ZFS host or live AWS credentials.
 
 ### Task 39: Route `run_all.py` through the ZFS application flow
+- Status: completed 2026-03-14 09:00 MDT by commit "Route ZFS harness through application flow".
 - Scope: `integration_tests/scripts/run_all.py`,
   `integration_tests/README.md`, harness tests, and any verification scripts
   that need backend-aware dispatch.
