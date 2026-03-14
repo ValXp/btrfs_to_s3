@@ -10,9 +10,16 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from btrfs_to_s3.chunker import chunk_stream
 from btrfs_to_s3.config import Config
+from btrfs_to_s3.filesystems import (
+    BackendSelectionError,
+    BackupSource,
+    FilesystemBackend,
+    create_filesystem_backend,
+)
 from btrfs_to_s3.lock import LockError, LockFile
 from btrfs_to_s3.manifest import (
     ChunkEntry,
@@ -31,23 +38,21 @@ from btrfs_to_s3.restore import (
     restore_chain,
     verify_restore,
 )
-from btrfs_to_s3.snapshots import SnapshotManager
 from btrfs_to_s3.state import State, SubvolumeState, load_state, save_state
-from btrfs_to_s3.streamer import cleanup_btrfs_send, open_btrfs_send
 from btrfs_to_s3.uploader import MAX_PART_SIZE, S3Uploader
 
 
 @dataclass(frozen=True)
 class BackupRequest:
     dry_run: bool
-    subvolume_names: tuple[str, ...] | None
+    source_names: tuple[str, ...] | None
     once: bool
     no_s3: bool
 
 
 @dataclass(frozen=True)
 class RestoreRequest:
-    subvolume: str
+    source_name: str
     target: Path
     manifest_key: str | None
     restore_timeout: int | None
@@ -60,9 +65,11 @@ class BackupOrchestrator:
         self,
         config: Config,
         logger: logging.Logger | None = None,
+        backend_factory: Callable[..., FilesystemBackend] = create_filesystem_backend,
     ) -> None:
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
+        self._backend_factory = backend_factory
 
     def run(self, request: BackupRequest) -> int:
         if request.dry_run:
@@ -88,21 +95,21 @@ class BackupOrchestrator:
         run_dir = os.environ.get("BTRFS_TO_S3_HARNESS_RUN_DIR")
         write_manifest = run_dir is not None
 
+        backend = self._get_backend()
+        if backend is None:
+            return 1
+
         state = load_state(self.config.global_cfg.state_path)
         state_subvols = dict(state.subvolumes)
-        selected = self._select_subvolumes(
-            write_manifest, request.subvolume_names
+        selected = self._select_sources(
+            backend, write_manifest, request.source_names
         )
         if not selected:
-            self.logger.error("event=backup_no_subvolumes status=failed")
+            self.logger.error("event=backup_no_sources status=failed")
             return 2
 
-        snapshot_manager = SnapshotManager(
-            self.config.snapshots.base_dir,
-            _ShellRunner(),
-        )
         work_items = self._plan_work(
-            state, now, snapshot_manager, selected, request.once
+            state, now, backend, selected, request.once
         )
         if not work_items:
             self.logger.info("event=backup_not_due status=skipped")
@@ -123,7 +130,7 @@ class BackupOrchestrator:
                 state_subvols,
                 timestamp,
                 prefix,
-                snapshot_manager,
+                backend,
                 uploader,
                 write_manifest,
                 run_dir,
@@ -138,34 +145,52 @@ class BackupOrchestrator:
         )
         return 0
 
-    def _select_subvolumes(
-        self, write_manifest: bool, names: tuple[str, ...] | None
-    ) -> list[Path]:
-        subvolume_paths = list(self.config.subvolumes.paths)
+    def _select_sources(
+        self,
+        backend: FilesystemBackend,
+        write_manifest: bool,
+        names: tuple[str, ...] | None,
+    ) -> list[BackupSource]:
+        sources = list(backend.sources)
         if names:
             name_set = set(names)
-            return [path for path in subvolume_paths if path.name in name_set]
+            return [
+                source
+                for source in sources
+                if source.identifier in name_set
+            ]
         if write_manifest:
-            return subvolume_paths[:1]
-        return subvolume_paths
+            return sources[:1]
+        return sources
 
     def _plan_work(
         self,
         state: State,
         now: datetime,
-        snapshot_manager: SnapshotManager,
-        selected: list[Path],
+        backend: FilesystemBackend,
+        selected: list[BackupSource],
         force_run: bool,
-    ) -> list[tuple[Path, PlanItem, str]]:
+    ) -> list[tuple[BackupSource, PlanItem, str]]:
         plan_by_name = {
             item.subvolume: item
             for item in _build_plan(
-                self.config, state, now, snapshot_manager, selected
+                self.config,
+                state,
+                now,
+                backend.snapshot_operations,
+                selected,
             )
         }
         return _filter_plan_items(
             plan_by_name, selected, force_run, self.logger
         )
+
+    def _get_backend(self) -> FilesystemBackend | None:
+        try:
+            return self._backend_factory(self.config, runner=_ShellRunner())
+        except BackendSelectionError as exc:
+            self.logger.error("event=filesystem_backend_failed error=%s", exc)
+            return None
 
     def _init_s3_client(self):
         try:
@@ -190,18 +215,18 @@ class BackupOrchestrator:
 
     def _backup_item(
         self,
-        item: tuple[Path, PlanItem, str],
+        item: tuple[BackupSource, PlanItem, str],
         state_subvols: dict[str, SubvolumeState],
         timestamp: str,
         prefix: str,
-        snapshot_manager: SnapshotManager,
+        backend: FilesystemBackend,
         uploader: S3Uploader,
         write_manifest: bool,
         run_dir: str | None,
-        selected: list[Path],
+        selected: list[BackupSource],
     ) -> int:
-        subvolume_path, plan_item, action = item
-        subvol_name = subvolume_path.name
+        source, plan_item, action = item
+        subvol_name = source.identifier
         subvol_state = state_subvols.get(subvol_name, SubvolumeState())
         action, parent_snapshot, parent_manifest = self._resolve_parents(
             action, plan_item, subvol_name, subvol_state
@@ -210,12 +235,16 @@ class BackupOrchestrator:
         snapshot_kind = "full" if action == "full" else "inc"
 
         snapshot = self._create_snapshot(
-            snapshot_manager, subvolume_path, subvol_name, snapshot_kind
+            backend,
+            source.path,
+            subvol_name,
+            snapshot_kind,
         )
 
         send_parent = parent_snapshot if effective_kind == "incremental" else None
         start_time = time.monotonic()
         stream_result = self._upload_stream(
+            backend,
             snapshot.path,
             send_parent,
             subvol_name,
@@ -247,7 +276,7 @@ class BackupOrchestrator:
             len(chunks),
         )
 
-        if write_manifest and run_dir and subvolume_path == selected[0]:
+        if write_manifest and run_dir and source.identifier == selected[0].identifier:
             self._write_manifest(run_dir, effective_kind, local_chunks)
 
         state_subvols[subvol_name] = SubvolumeState(
@@ -257,7 +286,7 @@ class BackupOrchestrator:
             if effective_kind == "full"
             else subvol_state.last_full_at,
         )
-        snapshot_manager.prune_snapshots(
+        backend.snapshot_operations.prune_snapshots(
             subvol_name,
             self.config.snapshots.retain,
             keep_name=parent_snapshot.name if parent_snapshot else None,
@@ -266,12 +295,12 @@ class BackupOrchestrator:
 
     def _create_snapshot(
         self,
-        snapshot_manager: SnapshotManager,
+        backend: FilesystemBackend,
         subvolume_path: Path,
         subvol_name: str,
         snapshot_kind: str,
     ):
-        snapshot = snapshot_manager.create_snapshot(
+        snapshot = backend.snapshot_operations.create_snapshot(
             subvolume_path, subvol_name, snapshot_kind
         )
         self.logger.info(
@@ -378,6 +407,7 @@ class BackupOrchestrator:
 
     def _upload_stream(
         self,
+        backend: FilesystemBackend,
         snapshot_path: Path,
         send_parent: Path | None,
         subvol_name: str,
@@ -386,7 +416,7 @@ class BackupOrchestrator:
         prefix: str,
         uploader: S3Uploader,
     ) -> tuple[int, list[ChunkEntry], list[dict[str, object]]] | None:
-        stream = open_btrfs_send(snapshot_path, send_parent)
+        stream = backend.send_operations.open_send(snapshot_path, send_parent)
         chunks: list[ChunkEntry] = []
         local_chunks: list[dict[str, object]] = []
         total_bytes = 0
@@ -420,11 +450,11 @@ class BackupOrchestrator:
             stream_error = exc
         finally:
             if stream_error is not None:
-                error = cleanup_btrfs_send(
+                error = backend.send_operations.cleanup_send(
                     stream.process, stdout=stream.stdout
                 )
                 self.logger.error(
-                    "event=backup_stream_failed subvolume=%s error=%s btrfs_send_error=%s",
+                    "event=backup_stream_failed subvolume=%s error=%s send_error=%s",
                     subvol_name,
                     stream_error,
                     error,
@@ -435,7 +465,7 @@ class BackupOrchestrator:
             if stream.process.returncode != 0:
                 error = stderr.decode("utf-8", errors="replace").strip()
                 self.logger.error(
-                    "event=btrfs_send_failed subvolume=%s error=%s",
+                    "event=send_failed subvolume=%s error=%s",
                     subvol_name,
                     error,
                 )
@@ -461,11 +491,17 @@ class RestoreOrchestrator:
         self,
         config: Config,
         logger: logging.Logger | None = None,
+        backend_factory: Callable[..., FilesystemBackend] = create_filesystem_backend,
     ) -> None:
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
+        self._backend_factory = backend_factory
 
     def run(self, request: RestoreRequest) -> int:
+        backend = self._get_backend()
+        if backend is None:
+            return 1
+
         if not _has_aws_credentials():
             self.logger.error("event=restore_no_credentials status=failed")
             return 1
@@ -475,7 +511,7 @@ class RestoreOrchestrator:
             return 1
 
         prefix = _build_prefix(self.config.s3.prefix)
-        current_key = f"{prefix}subvol/{request.subvolume}/current.json"
+        current_key = f"{prefix}subvol/{request.source_name}/current.json"
         manifest_key = request.manifest_key
         if not manifest_key:
             manifest_key = self._fetch_manifest_key(client, current_key)
@@ -506,6 +542,7 @@ class RestoreOrchestrator:
                 wait_for_restore=wait_restore,
                 restore_tier=self.config.restore.restore_tier,
                 restore_timeout_seconds=restore_timeout,
+                restore_operations=backend.restore_operations,
             )
         except RestoreError as exc:
             self.logger.error("event=restore_failed error=%s", exc)
@@ -514,7 +551,7 @@ class RestoreOrchestrator:
         metrics = calculate_metrics(total_bytes, elapsed)
         self.logger.info(
             "event=restore_metrics subvolume=%s total_bytes=%d elapsed_seconds=%.3f throughput=%s",
-            request.subvolume,
+            request.source_name,
             metrics.total_bytes,
             metrics.elapsed_seconds,
             format_throughput(metrics.throughput_bytes_per_sec),
@@ -524,10 +561,25 @@ class RestoreOrchestrator:
             if request.verify is not None
             else self.config.restore.verify_mode
         )
-        if self._verify_restore(verify_mode, manifests, request.target) != 0:
+        if (
+            self._verify_restore(
+                verify_mode,
+                manifests,
+                request.target,
+                backend.restore_operations,
+            )
+            != 0
+        ):
             return 1
         self.logger.info("event=restore_complete status=ok")
         return 0
+
+    def _get_backend(self) -> FilesystemBackend | None:
+        try:
+            return self._backend_factory(self.config, runner=_ShellRunner())
+        except BackendSelectionError as exc:
+            self.logger.error("event=filesystem_backend_failed error=%s", exc)
+            return None
 
     def _init_s3_client(self):
         try:
@@ -559,6 +611,7 @@ class RestoreOrchestrator:
         verify_mode: str,
         manifests,
         target_path: Path,
+        restore_operations,
     ) -> int:
         if verify_mode == "none":
             self.logger.info("event=restore_verify_skipped mode=none")
@@ -576,6 +629,7 @@ class RestoreOrchestrator:
                 target_path,
                 mode=verify_mode,
                 sample_max_files=self.config.restore.sample_max_files,
+                restore_operations=restore_operations,
             )
         except RestoreError as exc:
             self.logger.error("event=restore_verify_failed error=%s", exc)
@@ -608,40 +662,31 @@ def _build_plan(
     config: Config,
     state: State,
     now: datetime,
-    snapshot_manager: SnapshotManager,
-    selected: list[Path],
+    snapshot_operations,
+    selected: list[BackupSource],
 ) -> list[PlanItem]:
     available_snapshots: set[str] = set()
-    for path in selected:
-        for snapshot in snapshot_manager.list_snapshots(path.name):
+    for source in selected:
+        for snapshot in snapshot_operations.list_snapshots(source.identifier):
             available_snapshots.add(snapshot.name)
-    if len(selected) == len(config.subvolumes.paths):
-        plan_config = config
-    else:
-        plan_config = Config(
-            global_cfg=config.global_cfg,
-            schedule=config.schedule,
-            snapshots=config.snapshots,
-            subvolumes=type(config.subvolumes)(paths=tuple(selected)),
-            s3=config.s3,
-            restore=config.restore,
-            filesystem=config.filesystem,
-            zfs=config.zfs,
-        )
     return plan_backups(
-        plan_config, state, now, available_snapshots=available_snapshots
+        config,
+        state,
+        now,
+        available_snapshots=available_snapshots,
+        source_names=[source.identifier for source in selected],
     )
 
 
 def _filter_plan_items(
     plan_by_name: dict[str, PlanItem],
-    selected: list[Path],
+    selected: list[BackupSource],
     force_run: bool,
     logger: logging.Logger,
-) -> list[tuple[Path, PlanItem, str]]:
-    work_items: list[tuple[Path, PlanItem, str]] = []
-    for path in selected:
-        plan = plan_by_name.get(path.name)
+) -> list[tuple[BackupSource, PlanItem, str]]:
+    work_items: list[tuple[BackupSource, PlanItem, str]] = []
+    for source in selected:
+        plan = plan_by_name.get(source.identifier)
         if plan is None:
             continue
         action = plan.action
@@ -654,7 +699,7 @@ def _filter_plan_items(
                 plan.reason,
             )
             continue
-        work_items.append((path, plan, action))
+        work_items.append((source, plan, action))
     return work_items
 
 

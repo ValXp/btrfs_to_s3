@@ -12,12 +12,18 @@ from unittest import mock
 
 from btrfs_to_s3.config import (
     Config,
+    FilesystemConfig,
     GlobalConfig,
     RestoreConfig,
     S3Config,
     ScheduleConfig,
     SnapshotsConfig,
     SubvolumesConfig,
+    ZFSConfig,
+)
+from btrfs_to_s3.filesystems import (
+    BackupSource,
+    FilesystemBackend,
 )
 from btrfs_to_s3.orchestrator import (
     BackupOrchestrator,
@@ -33,7 +39,7 @@ from btrfs_to_s3.orchestrator import (
 )
 from btrfs_to_s3.planner import PlanItem
 from btrfs_to_s3.restore import ManifestInfo
-from btrfs_to_s3.snapshots import Snapshot, SnapshotManager
+from btrfs_to_s3.snapshots import Snapshot
 from btrfs_to_s3.uploader import UploadResult
 
 
@@ -79,6 +85,86 @@ def _make_config(temp_dir: str, subvolumes: tuple[Path, ...] | None = None) -> C
     )
 
 
+def _make_zfs_config(temp_dir: str) -> Config:
+    return Config(
+        global_cfg=GlobalConfig(
+            log_level="info",
+            state_path=Path(temp_dir) / "state.json",
+            lock_path=Path(temp_dir) / "lock",
+            spool_dir=Path(temp_dir) / "spool",
+            spool_size_bytes=1024,
+        ),
+        schedule=ScheduleConfig(
+            full_every_days=180,
+            incremental_every_days=7,
+            run_at="02:00",
+        ),
+        snapshots=SnapshotsConfig(base_dir=None, retain=2),
+        subvolumes=SubvolumesConfig(paths=()),
+        s3=S3Config(
+            bucket="bucket",
+            region="us-east-1",
+            prefix="backup/data",
+            chunk_size_bytes=2048,
+            storage_class_chunks="STANDARD",
+            storage_class_manifest="STANDARD",
+            concurrency=1,
+            spool_enabled=False,
+            sse="AES256",
+        ),
+        restore=RestoreConfig(
+            target_base_dir=Path(temp_dir) / "restore",
+            verify_mode="full",
+            sample_max_files=100,
+            wait_for_restore=True,
+            restore_timeout_seconds=3600,
+            restore_tier="Standard",
+        ),
+        filesystem=FilesystemConfig(backend="zfs"),
+        zfs=ZFSConfig(
+            pool_name="tank",
+            mount_root=Path("/tank"),
+            source_datasets=("tank/data",),
+            receive_parent_dataset="tank/restore",
+            snapshot_prefix="btrfs-to-s3",
+        ),
+    )
+
+
+def _make_backend(
+    temp_dir: str,
+    *,
+    paths: tuple[Path, ...] | None = None,
+    identifiers: tuple[str, ...] | None = None,
+    name: str = "btrfs",
+    snapshot_operations=None,
+    send_operations=None,
+    restore_operations=None,
+) -> FilesystemBackend:
+    if paths is None:
+        paths = (Path(temp_dir) / "data",)
+    if identifiers is None:
+        identifiers = tuple(path.name for path in paths)
+    if snapshot_operations is None:
+        snapshot_operations = mock.Mock()
+        snapshot_operations.list_snapshots.return_value = []
+        snapshot_operations.prune_snapshots.return_value = []
+    if send_operations is None:
+        send_operations = mock.Mock()
+    if restore_operations is None:
+        restore_operations = mock.Mock()
+    return FilesystemBackend(
+        name=name,
+        sources=tuple(
+            BackupSource(identifier=identifier, path=path)
+            for identifier, path in zip(identifiers, paths, strict=True)
+        ),
+        snapshot_operations=snapshot_operations,
+        send_operations=send_operations,
+        restore_operations=restore_operations,
+    )
+
+
 class OrchestratorHelperTests(unittest.TestCase):
     def test_build_prefix_normalizes(self) -> None:
         self.assertEqual(_build_prefix(""), "")
@@ -115,7 +201,7 @@ class OrchestratorHelperTests(unittest.TestCase):
             self.assertEqual(_get_s3_client("us-east-1"), "client")
         fake_boto3.client.assert_called_once_with("s3", region_name="us-east-1")
 
-    def test_select_subvolumes_honors_names_and_manifest_mode(self) -> None:
+    def test_select_sources_honors_names_and_manifest_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = (
                 Path(temp_dir) / "data",
@@ -123,19 +209,23 @@ class OrchestratorHelperTests(unittest.TestCase):
             )
             config = _make_config(temp_dir, subvolumes=paths)
             orchestrator = BackupOrchestrator(config)
-            selected = orchestrator._select_subvolumes(True, None)
-            self.assertEqual(selected, [paths[0]])
-            selected = orchestrator._select_subvolumes(False, ("root",))
-            self.assertEqual(selected, [paths[1]])
+            backend = orchestrator._get_backend()
+            assert backend is not None
+            selected = orchestrator._select_sources(backend, True, None)
+            self.assertEqual(selected, [backend.sources[0]])
+            selected = orchestrator._select_sources(
+                backend, False, ("root",)
+            )
+            self.assertEqual(selected, [backend.sources[1]])
 
-    def test_build_plan_limits_subvolumes_for_selection(self) -> None:
+    def test_build_plan_limits_sources_for_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = (
                 Path(temp_dir) / "data",
                 Path(temp_dir) / "root",
             )
             config = _make_config(temp_dir, subvolumes=paths)
-            selected = [paths[1]]
+            selected = [BackupSource(identifier="root", path=paths[1])]
             now = datetime.now(timezone.utc)
             state = mock.Mock()
             snapshot = Snapshot(
@@ -151,9 +241,16 @@ class OrchestratorHelperTests(unittest.TestCase):
 
             captured: dict[str, object] = {}
 
-            def fake_plan_backups(plan_config, plan_state, plan_now, available_snapshots):
+            def fake_plan_backups(
+                plan_config,
+                plan_state,
+                plan_now,
+                available_snapshots,
+                source_names,
+            ):
                 captured["config"] = plan_config
                 captured["snapshots"] = available_snapshots
+                captured["source_names"] = tuple(source_names)
                 return []
 
             with mock.patch(
@@ -162,12 +259,13 @@ class OrchestratorHelperTests(unittest.TestCase):
             ):
                 _build_plan(config, state, now, FakeSnapshotManager(), selected)
 
-            plan_config = captured["config"]
-            self.assertEqual(plan_config.subvolumes.paths, tuple(selected))
+            self.assertIs(captured["config"], config)
             self.assertEqual(captured["snapshots"], {snapshot.name})
+            self.assertEqual(captured["source_names"], ("root",))
 
     def test_filter_plan_items_respects_force_run(self) -> None:
         logger = logging.getLogger("btrfs_to_s3.orchestrator_test")
+        source = BackupSource(identifier="data", path=Path("/srv/data"))
         plan_by_name = {
             "data": PlanItem(
                 subvolume="data",
@@ -179,7 +277,7 @@ class OrchestratorHelperTests(unittest.TestCase):
         with self.assertLogs("btrfs_to_s3.orchestrator_test", level="INFO") as logs:
             items = _filter_plan_items(
                 plan_by_name,
-                [Path("/srv/data")],
+                [source],
                 False,
                 logger,
             )
@@ -197,7 +295,7 @@ class OrchestratorHelperTests(unittest.TestCase):
             )
         }
         items = _filter_plan_items(
-            forced_plan, [Path("/srv/data")], True, logger
+            forced_plan, [source], True, logger
         )
         self.assertEqual(items[0][2], "inc")
 
@@ -205,9 +303,33 @@ class OrchestratorHelperTests(unittest.TestCase):
         logger = logging.getLogger("btrfs_to_s3.orchestrator_test")
         plan_by_name = {}
         items = _filter_plan_items(
-            plan_by_name, [Path("/srv/unknown")], False, logger
+            plan_by_name,
+            [BackupSource(identifier="unknown", path=Path("/srv/unknown"))],
+            False,
+            logger,
         )
         self.assertEqual(items, [])
+
+    def test_get_backend_uses_configured_backend_factory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_zfs_config(temp_dir)
+            backend = _make_backend(
+                temp_dir,
+                paths=(Path("/tank/data"),),
+                identifiers=("tank/data",),
+                name="zfs",
+            )
+            factory = mock.Mock(return_value=backend)
+            orchestrator = BackupOrchestrator(config, backend_factory=factory)
+
+            resolved = orchestrator._get_backend()
+
+            self.assertIs(resolved, backend)
+            factory.assert_called_once()
+            self.assertEqual(
+                factory.call_args.args[0].filesystem.backend,
+                "zfs",
+            )
 
     def test_shell_runner_adds_sbin_to_path(self) -> None:
         runner = _ShellRunner()
@@ -228,7 +350,7 @@ class OrchestratorBackupTests(unittest.TestCase):
             config = _make_config(temp_dir)
             request = BackupRequest(
                 dry_run=True,
-                subvolume_names=None,
+                source_names=None,
                 once=False,
                 no_s3=False,
             )
@@ -250,7 +372,7 @@ class OrchestratorBackupTests(unittest.TestCase):
             )
             request = BackupRequest(
                 dry_run=False,
-                subvolume_names=None,
+                source_names=None,
                 once=False,
                 no_s3=True,
             )
@@ -261,7 +383,7 @@ class OrchestratorBackupTests(unittest.TestCase):
             self.assertEqual(result, 2)
             self.assertTrue(
                 any(
-                    "event=backup_no_subvolumes" in entry
+                    "event=backup_no_sources" in entry
                     for entry in logs.output
                 )
             )
@@ -272,18 +394,23 @@ class OrchestratorBackupTests(unittest.TestCase):
             orchestrator = BackupOrchestrator(config)
             request = BackupRequest(
                 dry_run=False,
-                subvolume_names=None,
+                source_names=None,
                 once=False,
                 no_s3=False,
             )
+            backend = _make_backend(temp_dir)
             with mock.patch.object(
                 BackupOrchestrator,
                 "_plan_work",
-                return_value=[(Path(temp_dir), mock.Mock(), "full")],
+                return_value=[(backend.sources[0], mock.Mock(), "full")],
             ), mock.patch.object(
                 BackupOrchestrator,
-                "_select_subvolumes",
-                return_value=[Path(temp_dir)],
+                "_get_backend",
+                return_value=backend,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_select_sources",
+                return_value=[backend.sources[0]],
             ), mock.patch(
                 "btrfs_to_s3.orchestrator._has_aws_credentials",
                 return_value=True,
@@ -318,6 +445,8 @@ class OrchestratorBackupTests(unittest.TestCase):
                 kind="full",
                 created_at=datetime.now(timezone.utc),
             )
+            backend = _make_backend(temp_dir)
+            backend.snapshot_operations.create_snapshot.return_value = snapshot
             plan_item = PlanItem(
                 subvolume="data",
                 action="full",
@@ -335,22 +464,18 @@ class OrchestratorBackupTests(unittest.TestCase):
             ), mock.patch.object(
                 BackupOrchestrator, "_log_backup_metrics"
             ), mock.patch.object(
-                SnapshotManager, "create_snapshot", return_value=snapshot
-            ), mock.patch.object(
-                SnapshotManager, "prune_snapshots", return_value=[]
-            ), mock.patch.object(
                 BackupOrchestrator, "_write_manifest"
             ) as write_manifest:
                 result = orchestrator._backup_item(
-                    (Path(temp_dir) / "data", plan_item, "full"),
+                    (backend.sources[0], plan_item, "full"),
                     state_subvols,
                     "20260101T000000Z",
                     "backup/",
-                    SnapshotManager(config.snapshots.base_dir, mock.Mock()),
+                    backend,
                     mock.Mock(client=object()),
                     True,
                     temp_dir,
-                    [Path(temp_dir) / "data"],
+                    [backend.sources[0]],
                 )
             self.assertEqual(result, 0)
             write_manifest.assert_called_once()
@@ -361,6 +486,7 @@ class OrchestratorBackupTests(unittest.TestCase):
             orchestrator = BackupOrchestrator(
                 config, logger=logging.getLogger("btrfs_to_s3.orchestrator_test")
             )
+            backend = _make_backend(temp_dir)
 
             class FakeProcess:
                 returncode = 1
@@ -373,10 +499,8 @@ class OrchestratorBackupTests(unittest.TestCase):
                     self.stdout = io.BytesIO(b"")
                     self.process = FakeProcess()
 
+            backend.send_operations.open_send.return_value = FakeStream()
             with mock.patch(
-                "btrfs_to_s3.orchestrator.open_btrfs_send",
-                return_value=FakeStream(),
-            ), mock.patch(
                 "btrfs_to_s3.orchestrator.chunk_stream",
                 return_value=iter([]),
             ):
@@ -384,6 +508,7 @@ class OrchestratorBackupTests(unittest.TestCase):
                     "btrfs_to_s3.orchestrator_test", level="ERROR"
                 ) as logs:
                     result = orchestrator._upload_stream(
+                        backend,
                         Path(temp_dir),
                         None,
                         "data",
@@ -394,13 +519,14 @@ class OrchestratorBackupTests(unittest.TestCase):
                     )
             self.assertIsNone(result)
             self.assertTrue(
-                any("event=btrfs_send_failed" in entry for entry in logs.output)
+                any("event=send_failed" in entry for entry in logs.output)
             )
 
     def test_upload_stream_success_returns_chunks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)
             orchestrator = BackupOrchestrator(config)
+            backend = _make_backend(temp_dir)
 
             class FakeProcess:
                 returncode = 0
@@ -431,14 +557,13 @@ class OrchestratorBackupTests(unittest.TestCase):
             uploader.upload_stream.return_value = UploadResult(
                 key="key", size=3, etag="etag"
             )
+            backend.send_operations.open_send.return_value = FakeStream()
             with mock.patch(
-                "btrfs_to_s3.orchestrator.open_btrfs_send",
-                return_value=FakeStream(),
-            ), mock.patch(
                 "btrfs_to_s3.orchestrator.chunk_stream",
                 return_value=iter([FakeChunk(0, b"abc")]),
             ):
                 total_bytes, chunks, local_chunks = orchestrator._upload_stream(
+                    backend,
                     Path(temp_dir),
                     None,
                     "data",
@@ -461,11 +586,50 @@ class OrchestratorBackupTests(unittest.TestCase):
 
 
 class OrchestratorRestoreTests(unittest.TestCase):
+    def test_restore_passes_backend_restore_operations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir)
+            backend = _make_backend(temp_dir)
+            request = RestoreRequest(
+                source_name="data",
+                target=Path(temp_dir) / "restore",
+                manifest_key="manifest.json",
+                restore_timeout=None,
+                wait_restore=None,
+                verify="none",
+            )
+            orchestrator = RestoreOrchestrator(
+                config,
+                backend_factory=lambda config, runner: backend,
+            )
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_init_s3_client",
+                return_value=object(),
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_resolve_chain",
+                return_value=[ManifestInfo("key", "full", None, (), {}, None)],
+            ), mock.patch(
+                "btrfs_to_s3.orchestrator.restore_chain",
+                return_value=0,
+            ) as restore_chain_mock:
+                self.assertEqual(orchestrator.run(request), 0)
+
+            self.assertIs(
+                restore_chain_mock.call_args.kwargs["restore_operations"],
+                backend.restore_operations,
+            )
+
     def test_restore_requires_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)
             request = RestoreRequest(
-                subvolume="data",
+                source_name="data",
                 target=Path(temp_dir) / "restore",
                 manifest_key=None,
                 restore_timeout=None,
@@ -485,7 +649,7 @@ class OrchestratorRestoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)
             request = RestoreRequest(
-                subvolume="data",
+                source_name="data",
                 target=Path(temp_dir) / "restore",
                 manifest_key="manifest.json",
                 restore_timeout=None,
@@ -505,7 +669,7 @@ class OrchestratorRestoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)
             request = RestoreRequest(
-                subvolume="data",
+                source_name="data",
                 target=Path(temp_dir) / "restore",
                 manifest_key=None,
                 restore_timeout=None,
@@ -529,7 +693,7 @@ class OrchestratorRestoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)
             request = RestoreRequest(
-                subvolume="data",
+                source_name="data",
                 target=Path(temp_dir) / "restore",
                 manifest_key="manifest.json",
                 restore_timeout=None,
@@ -553,7 +717,7 @@ class OrchestratorRestoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)
             request = RestoreRequest(
-                subvolume="data",
+                source_name="data",
                 target=Path(temp_dir) / "restore",
                 manifest_key="manifest.json",
                 restore_timeout=None,
@@ -586,7 +750,7 @@ class OrchestratorRestoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)
             request = RestoreRequest(
-                subvolume="data",
+                source_name="data",
                 target=Path(temp_dir) / "restore",
                 manifest_key="manifest.json",
                 restore_timeout=None,
@@ -699,7 +863,10 @@ class OrchestratorRestoreTests(unittest.TestCase):
                     ):
                         self.assertEqual(
                             orchestrator._verify_restore(
-                                "full", [manifest], Path(temp_dir)
+                                "full",
+                                [manifest],
+                                Path(temp_dir),
+                                mock.Mock(),
                             ),
                             1,
                         )
@@ -713,7 +880,7 @@ class OrchestratorRestoreTests(unittest.TestCase):
                 "btrfs_to_s3.orchestrator_test", level="INFO"
             ) as logs:
                 result = orchestrator._verify_restore(
-                    "none", [], Path(temp_dir)
+                    "none", [], Path(temp_dir), mock.Mock()
                 )
             self.assertEqual(result, 0)
             self.assertTrue(
@@ -743,7 +910,10 @@ class OrchestratorRestoreTests(unittest.TestCase):
                 "btrfs_to_s3.orchestrator_test", level="INFO"
             ) as logs:
                 result = orchestrator._verify_restore(
-                    "full", [manifest], Path(temp_dir)
+                    "full",
+                    [manifest],
+                    Path(temp_dir),
+                    mock.Mock(),
                 )
             self.assertEqual(result, 0)
             verify.assert_called_once()

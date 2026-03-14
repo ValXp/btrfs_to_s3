@@ -32,9 +32,11 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     backup.add_argument("--log-level", help="override log level")
     backup.add_argument("--dry-run", action="store_true", help="plan only")
     backup.add_argument(
+        "--source",
         "--subvolume",
+        dest="source",
         action="append",
-        help="limit backup to specific subvolume (repeatable)",
+        help="limit backup to specific source (repeatable); --subvolume is a compatibility alias",
     )
     backup.add_argument("--once", action="store_true", help="ignore schedule")
     backup.add_argument(
@@ -44,7 +46,13 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     restore = subparsers.add_parser("restore", help="restore backup")
     restore.add_argument("--config", required=True, help="path to config.toml")
     restore.add_argument("--log-level", help="override log level")
-    restore.add_argument("--subvolume", required=True, help="subvolume name")
+    restore.add_argument(
+        "--source",
+        "--subvolume",
+        dest="source",
+        required=True,
+        help="source identifier; --subvolume is a compatibility alias",
+    )
     restore.add_argument("--target", required=True, help="restore target path")
     restore.add_argument(
         "--manifest-key", help="override current pointer with manifest key"
@@ -106,9 +114,9 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     setup_logging(config.global_cfg.log_level)
     logging.getLogger(__name__).info(
-        "event=command_start command=%s subvolume_filter=%s",
+        "event=command_start command=%s source_filter=%s",
         args.command,
-        args.subvolume,
+        args.source,
     )
     if args.command == "backup":
         return run_backup(args, config)
@@ -120,7 +128,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 def run_backup(args: argparse.Namespace, config: Config) -> int:
     request = BackupRequest(
         dry_run=args.dry_run,
-        subvolume_names=tuple(args.subvolume) if args.subvolume else None,
+        source_names=tuple(args.source) if args.source else None,
         once=args.once,
         no_s3=args.no_s3,
     )
@@ -173,7 +181,7 @@ def _parse_level(value: str) -> int:
 
 def run_restore(args: argparse.Namespace, config: Config) -> int:
     request = RestoreRequest(
-        subvolume=args.subvolume,
+        source_name=args.source,
         target=Path(args.target).expanduser(),
         manifest_key=args.manifest_key,
         restore_timeout=args.restore_timeout,

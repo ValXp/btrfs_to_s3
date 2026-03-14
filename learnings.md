@@ -45,3 +45,5 @@ Learnings
 - FYI: any code that rebuilds a `Config` instance must preserve `filesystem` and `zfs` fields, or a loaded ZFS config silently falls back to the default Btrfs backend.
 - FYI: `pyproject.toml` uses an explicit `packages` list, so new subpackages like `btrfs_to_s3.filesystems` must be added there or builds will omit them.
 - FYI: `restore.py` now treats receive/finalize/metadata checks as backend operations; restore seam tests should inject `restore_operations` instead of patching `subprocess` in `restore.py`.
+- FYI: backup and restore requests now use backend-neutral `source_names`/`source_name` internally; the CLI still accepts `--subvolume` as a compatibility alias to `--source`.
+- FYI: `create_filesystem_backend` is now the orchestrator seam for backend selection; until the ZFS application backend lands, a ZFS config will fail at runtime with `event=filesystem_backend_failed`.

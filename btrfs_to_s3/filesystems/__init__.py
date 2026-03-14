@@ -15,6 +15,12 @@ from btrfs_to_s3.filesystems.base import (
     select_retention,
     snapshot_name,
 )
+from btrfs_to_s3.filesystems.factory import (
+    BackendSelectionError,
+    BackupSource,
+    FilesystemBackend,
+    create_filesystem_backend,
+)
 from btrfs_to_s3.filesystems.btrfs import (
     BtrfsRestoreOperations,
     BtrfsSendOperations,
@@ -25,7 +31,10 @@ __all__ = [
     "BtrfsRestoreOperations",
     "BtrfsSendOperations",
     "BtrfsSnapshotManager",
+    "BackendSelectionError",
+    "BackupSource",
     "CommandRunner",
+    "FilesystemBackend",
     "ReceiveStream",
     "RestoreBackendError",
     "RestoreOperations",
@@ -35,6 +44,7 @@ __all__ = [
     "SnapshotError",
     "SnapshotOperations",
     "StreamError",
+    "create_filesystem_backend",
     "parse_snapshot_name",
     "select_retention",
     "snapshot_name",

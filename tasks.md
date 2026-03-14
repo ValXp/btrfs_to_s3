@@ -213,6 +213,7 @@
     passes.
 
 ### Task 32: Orchestrator and restore flow backend selection
+- Status: completed 2026-03-13 21:35 MDT by commit "Select filesystem backend in orchestrators".
 - Scope: `btrfs_to_s3/orchestrator.py`, `btrfs_to_s3/cli.py`,
   `btrfs_to_s3/planner.py` if needed, backend factory code, and tests for CLI
   and orchestration.

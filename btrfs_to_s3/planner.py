@@ -25,6 +25,7 @@ def plan_backups(
     state: State,
     now: datetime,
     available_snapshots: Iterable[str] | None = None,
+    source_names: Iterable[str] | None = None,
 ) -> list[PlanItem]:
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
@@ -33,9 +34,13 @@ def plan_backups(
         if available_snapshots is not None
         else None
     )
+    names = (
+        tuple(source_names)
+        if source_names is not None
+        else _config_source_names(config)
+    )
     plans: list[PlanItem] = []
-    for subvolume_path in config.subvolumes.paths:
-        name = _subvolume_name(subvolume_path)
+    for name in names:
         sub_state = state.subvolumes.get(name)
         plans.append(
             _plan_subvolume(
@@ -48,6 +53,12 @@ def plan_backups(
             )
         )
     return plans
+
+
+def _config_source_names(config: Config) -> tuple[str, ...]:
+    if config.filesystem.backend == "zfs" and config.zfs is not None:
+        return config.zfs.source_datasets
+    return tuple(_subvolume_name(path) for path in config.subvolumes.paths)
 
 
 def _plan_subvolume(
