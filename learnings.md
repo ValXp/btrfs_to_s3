@@ -39,3 +39,4 @@ Learnings
 - FYI: `integration_tests/harness/zfs.py` rejects pool files and mount roots outside the configured `run_dir`, so disposable ZFS fixtures need to stay under `integration_tests/run/`.
 - FYI: the local `python3 -m pytest` shim ignores positional test selectors and still runs unittest discovery for the full suite.
 - FYI: `integration_tests/scripts/setup_zfs.py` writes `zfs_pool_state.json` immediately after pool create/import so `teardown_zfs.py` can clean up partial setup failures.
+- FYI: the standalone ZFS retention probe needs `retention_snapshots + 1` snapshots so the configured policy prunes a parent snapshot while still leaving a latest snapshot to test incremental-send failure.
