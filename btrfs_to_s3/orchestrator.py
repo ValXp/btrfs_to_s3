@@ -39,7 +39,7 @@ from btrfs_to_s3.restore import (
     restore_chain,
     verify_restore,
 )
-from btrfs_to_s3.state import State, SubvolumeState, load_state, save_state
+from btrfs_to_s3.state import SourceState, State, load_state, save_state
 from btrfs_to_s3.uploader import MAX_PART_SIZE, S3Uploader
 
 
@@ -101,7 +101,7 @@ class BackupOrchestrator:
             return 1
 
         state = load_state(self.config.global_cfg.state_path)
-        state_subvols = dict(state.subvolumes)
+        state_sources = dict(state.sources)
         selected = self._select_sources(
             backend, write_manifest, request.source_names
         )
@@ -128,7 +128,7 @@ class BackupOrchestrator:
         for item in work_items:
             result = self._backup_item(
                 item,
-                state_subvols,
+                state_sources,
                 timestamp,
                 prefix,
                 backend,
@@ -142,7 +142,7 @@ class BackupOrchestrator:
 
         save_state(
             self.config.global_cfg.state_path,
-            State(subvolumes=state_subvols, last_run_at=timestamp),
+            State(sources=state_sources, last_run_at=timestamp),
         )
         return 0
 
@@ -173,7 +173,7 @@ class BackupOrchestrator:
         force_run: bool,
     ) -> list[tuple[BackupSource, PlanItem, str]]:
         plan_by_name = {
-            item.subvolume: item
+            item.source_name: item
             for item in _build_plan(
                 self.config,
                 state,
@@ -217,7 +217,7 @@ class BackupOrchestrator:
     def _backup_item(
         self,
         item: tuple[BackupSource, PlanItem, str],
-        state_subvols: dict[str, SubvolumeState],
+        state_sources: dict[str, SourceState],
         timestamp: str,
         prefix: str,
         backend: FilesystemBackend,
@@ -227,18 +227,18 @@ class BackupOrchestrator:
         selected: list[BackupSource],
     ) -> int:
         source, plan_item, action = item
-        subvol_name = source.identifier
-        subvol_state = state_subvols.get(subvol_name, SubvolumeState())
+        source_name = source.identifier
+        source_state = state_sources.get(source_name, SourceState())
         action, parent_snapshot, parent_manifest = self._resolve_parents(
             action,
             plan_item,
-            subvol_name,
-            subvol_state,
+            source_name,
+            source_state,
             backend.name,
         )
         parent_snapshot_name = None
         if action == "inc":
-            parent_snapshot_name = subvol_state.snapshot_name
+            parent_snapshot_name = source_state.snapshot_name
             if (
                 parent_snapshot_name is None
                 and plan_item.parent_snapshot
@@ -251,7 +251,7 @@ class BackupOrchestrator:
         snapshot = self._create_snapshot(
             backend,
             source.path,
-            subvol_name,
+            source_name,
             snapshot_kind,
         )
 
@@ -261,7 +261,7 @@ class BackupOrchestrator:
             backend,
             snapshot.path,
             send_parent,
-            subvol_name,
+            source_name,
             effective_kind,
             timestamp,
             prefix,
@@ -274,7 +274,7 @@ class BackupOrchestrator:
         manifest_key = self._publish_manifest(
             uploader.client,
             backend.name,
-            subvol_name,
+            source_name,
             effective_kind,
             timestamp,
             prefix,
@@ -283,10 +283,10 @@ class BackupOrchestrator:
             chunks,
             total_bytes,
         )
-        self._log_backup_metrics(subvol_name, total_bytes, start_time)
+        self._log_backup_metrics(source_name, total_bytes, start_time)
         self.logger.info(
-            "event=backup_uploaded subvolume=%s manifest_key=%s chunk_count=%d",
-            subvol_name,
+            "event=backup_uploaded source=%s manifest_key=%s chunk_count=%d",
+            source_name,
             manifest_key,
             len(chunks),
         )
@@ -294,7 +294,7 @@ class BackupOrchestrator:
         if write_manifest and run_dir and source.identifier == selected[0].identifier:
             self._write_manifest(run_dir, effective_kind, local_chunks)
 
-        state_subvols[subvol_name] = SubvolumeState(
+        state_sources[source_name] = SourceState(
             last_snapshot=str(snapshot.path),
             last_snapshot_name=snapshot.name,
             last_snapshot_path=str(snapshot.path)
@@ -303,10 +303,10 @@ class BackupOrchestrator:
             last_manifest=manifest_key,
             last_full_at=timestamp
             if effective_kind == "full"
-            else subvol_state.last_full_at,
+            else source_state.last_full_at,
         )
         backend.snapshot_operations.prune_snapshots(
-            subvol_name,
+            source_name,
             self.config.snapshots.retain,
             keep_name=parent_snapshot_name,
         )
@@ -315,16 +315,16 @@ class BackupOrchestrator:
     def _create_snapshot(
         self,
         backend: FilesystemBackend,
-        subvolume_path: Path,
-        subvol_name: str,
+        source_path: Path,
+        source_name: str,
         snapshot_kind: str,
     ):
         snapshot = backend.snapshot_operations.create_snapshot(
-            subvolume_path, subvol_name, snapshot_kind
+            source_path, source_name, snapshot_kind
         )
         self.logger.info(
-            "event=snapshot_created subvolume=%s path=%s kind=%s",
-            subvol_name,
+            "event=snapshot_created source=%s path=%s kind=%s",
+            source_name,
             snapshot.path,
             snapshot_kind,
         )
@@ -334,7 +334,7 @@ class BackupOrchestrator:
         self,
         client,
         filesystem: str,
-        subvol_name: str,
+        source_name: str,
         effective_kind: str,
         timestamp: str,
         prefix: str,
@@ -344,16 +344,16 @@ class BackupOrchestrator:
         total_bytes: int,
     ) -> str:
         manifest_key = (
-            f"{prefix}subvol/{subvol_name}/{effective_kind}/"
+            f"{_source_object_prefix(prefix, source_name)}{effective_kind}/"
             f"manifest-{timestamp}.json"
         )
-        current_key = f"{prefix}subvol/{subvol_name}/current.json"
+        current_key = f"{_source_object_prefix(prefix, source_name)}current.json"
         snapshot_identity = str(snapshot.path)
         snapshot_path = snapshot_identity if filesystem == "btrfs" else None
         manifest = Manifest(
             version=MANIFEST_VERSION,
             filesystem=filesystem,
-            subvolume=subvol_name,
+            source_name=source_name,
             kind=effective_kind,
             created_at=timestamp,
             snapshot=SnapshotInfo(
@@ -389,13 +389,13 @@ class BackupOrchestrator:
         return manifest_key
 
     def _log_backup_metrics(
-        self, subvol_name: str, total_bytes: int, start_time: float
+        self, source_name: str, total_bytes: int, start_time: float
     ) -> None:
         elapsed = time.monotonic() - start_time
         metrics = calculate_metrics(total_bytes, elapsed)
         self.logger.info(
-            "event=backup_metrics subvolume=%s total_bytes=%d elapsed_seconds=%.3f throughput=%s",
-            subvol_name,
+            "event=backup_metrics source=%s total_bytes=%d elapsed_seconds=%.3f throughput=%s",
+            source_name,
             metrics.total_bytes,
             metrics.elapsed_seconds,
             format_throughput(metrics.throughput_bytes_per_sec),
@@ -405,35 +405,35 @@ class BackupOrchestrator:
         self,
         action: str,
         plan_item: PlanItem,
-        subvol_name: str,
-        subvol_state: SubvolumeState,
+        source_name: str,
+        source_state: SourceState,
         filesystem: str,
     ) -> tuple[str, Path | None, str | None]:
         parent_snapshot = None
         if action == "inc" and plan_item.parent_snapshot:
             parent_snapshot = Path(plan_item.parent_snapshot)
             parent_snapshot_path = (
-                subvol_state.snapshot_path or plan_item.parent_snapshot
+                source_state.snapshot_path or plan_item.parent_snapshot
             )
             if filesystem == "btrfs" and (
                 parent_snapshot_path is None
                 or not Path(parent_snapshot_path).exists()
             ):
                 self.logger.info(
-                    "event=backup_parent_missing subvolume=%s path=%s",
-                    subvol_name,
+                    "event=backup_parent_missing source=%s path=%s",
+                    source_name,
                     parent_snapshot_path or parent_snapshot,
                 )
                 action = "full"
                 parent_snapshot = None
-        if action == "inc" and not subvol_state.last_manifest:
+        if action == "inc" and not source_state.last_manifest:
             self.logger.info(
-                "event=backup_parent_manifest_missing subvolume=%s",
-                subvol_name,
+                "event=backup_parent_manifest_missing source=%s",
+                source_name,
             )
             action = "full"
             parent_snapshot = None
-        parent_manifest = subvol_state.last_manifest if action == "inc" else None
+        parent_manifest = source_state.last_manifest if action == "inc" else None
         return action, parent_snapshot, parent_manifest
 
     def _upload_stream(
@@ -441,7 +441,7 @@ class BackupOrchestrator:
         backend: FilesystemBackend,
         snapshot_path: Path,
         send_parent: Path | None,
-        subvol_name: str,
+        source_name: str,
         effective_kind: str,
         timestamp: str,
         prefix: str,
@@ -457,7 +457,7 @@ class BackupOrchestrator:
                 stream.stdout, self.config.s3.chunk_size_bytes
             ):
                 chunk_key = (
-                    f"{prefix}subvol/{subvol_name}/{effective_kind}/"
+                    f"{_source_object_prefix(prefix, source_name)}{effective_kind}/"
                     f"chunk-{timestamp}-{chunk.index}.bin"
                 )
                 result = uploader.upload_stream(chunk_key, chunk.reader)
@@ -485,8 +485,8 @@ class BackupOrchestrator:
                     stream.process, stdout=stream.stdout
                 )
                 self.logger.error(
-                    "event=backup_stream_failed subvolume=%s error=%s send_error=%s",
-                    subvol_name,
+                    "event=backup_stream_failed source=%s error=%s send_error=%s",
+                    source_name,
                     stream_error,
                     error,
                 )
@@ -496,8 +496,8 @@ class BackupOrchestrator:
             if stream.process.returncode != 0:
                 error = stderr.decode("utf-8", errors="replace").strip()
                 self.logger.error(
-                    "event=send_failed subvolume=%s error=%s",
-                    subvol_name,
+                    "event=send_failed source=%s error=%s",
+                    source_name,
                     error,
                 )
                 return None
@@ -542,7 +542,9 @@ class RestoreOrchestrator:
             return 1
 
         prefix = _build_prefix(self.config.s3.prefix)
-        current_key = f"{prefix}subvol/{request.source_name}/current.json"
+        current_key = (
+            f"{_source_object_prefix(prefix, request.source_name)}current.json"
+        )
         manifest_key = request.manifest_key
         if not manifest_key:
             manifest_key = self._fetch_manifest_key(client, current_key)
@@ -581,7 +583,7 @@ class RestoreOrchestrator:
         elapsed = time.monotonic() - start_time
         metrics = calculate_metrics(total_bytes, elapsed)
         self.logger.info(
-            "event=restore_metrics subvolume=%s total_bytes=%d elapsed_seconds=%.3f throughput=%s",
+            "event=restore_metrics source=%s total_bytes=%d elapsed_seconds=%.3f throughput=%s",
             request.source_name,
             metrics.total_bytes,
             metrics.elapsed_seconds,
@@ -752,13 +754,19 @@ def _filter_plan_items(
             action = "inc" if plan.parent_snapshot else "full"
         if action == "skip":
             logger.info(
-                "event=backup_not_due subvolume=%s reason=%s",
-                plan.subvolume,
+                "event=backup_not_due source=%s reason=%s",
+                plan.source_name,
                 plan.reason,
             )
             continue
         work_items.append((source, plan, action))
     return work_items
+
+
+def _source_object_prefix(prefix: str, source_name: str) -> str:
+    # Keep the legacy `subvol/` object layout so previously uploaded backups,
+    # manifests, and current pointers remain restorable.
+    return f"{prefix}subvol/{source_name}/"
 
 
 def _has_aws_credentials() -> bool:

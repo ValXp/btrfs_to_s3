@@ -1,4 +1,9 @@
-"""Local state persistence."""
+"""Local state persistence.
+
+The on-disk state file keeps the legacy ``subvolumes`` key for backward
+compatibility. In-memory code should prefer the backend-neutral ``sources``
+view instead.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class SubvolumeState:
+class SourceState:
     # last_snapshot stores the backend-specific snapshot identity.
     last_snapshot: str | None = None
     last_snapshot_name: str | None = None
@@ -19,7 +24,7 @@ class SubvolumeState:
     last_full_at: str | None = None
 
     @staticmethod
-    def from_dict(data: dict[str, Any]) -> "SubvolumeState":
+    def from_dict(data: dict[str, Any]) -> "SourceState":
         last_snapshot = data.get("last_snapshot")
         last_snapshot_name = data.get("last_snapshot_name")
         if last_snapshot_name is None and isinstance(last_snapshot, str):
@@ -27,7 +32,7 @@ class SubvolumeState:
         last_snapshot_path = data.get("last_snapshot_path")
         if last_snapshot_path is None and isinstance(last_snapshot, str):
             last_snapshot_path = _legacy_snapshot_path(last_snapshot)
-        return SubvolumeState(
+        return SourceState(
             last_snapshot=last_snapshot,
             last_snapshot_name=last_snapshot_name,
             last_snapshot_path=last_snapshot_path,
@@ -65,24 +70,46 @@ class SubvolumeState:
         }
 
 
-@dataclass(frozen=True)
+SubvolumeState = SourceState
+
+
+@dataclass(frozen=True, init=False)
 class State:
-    subvolumes: dict[str, SubvolumeState] = field(default_factory=dict)
+    sources: dict[str, SourceState] = field(default_factory=dict)
     last_run_at: str | None = None
+
+    def __init__(
+        self,
+        *,
+        sources: dict[str, SourceState] | None = None,
+        subvolumes: dict[str, SourceState] | None = None,
+        last_run_at: str | None = None,
+    ) -> None:
+        if sources is not None and subvolumes is not None:
+            raise TypeError("pass only one of sources or subvolumes")
+        object.__setattr__(self, "sources", dict(sources or subvolumes or {}))
+        object.__setattr__(self, "last_run_at", last_run_at)
+
+    @property
+    def subvolumes(self) -> dict[str, SourceState]:
+        return self.sources
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "State":
-        subvolumes = {
-            name: SubvolumeState.from_dict(value)
-            for name, value in data.get("subvolumes", {}).items()
+        raw_sources = data.get("sources")
+        if raw_sources is None:
+            raw_sources = data.get("subvolumes", {})
+        sources = {
+            name: SourceState.from_dict(value)
+            for name, value in raw_sources.items()
         }
-        return State(subvolumes=subvolumes, last_run_at=data.get("last_run_at"))
+        return State(sources=sources, last_run_at=data.get("last_run_at"))
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "subvolumes": {
-                name: subvolume.to_dict()
-                for name, subvolume in self.subvolumes.items()
+                name: source.to_dict()
+                for name, source in self.sources.items()
             },
             "last_run_at": self.last_run_at,
         }

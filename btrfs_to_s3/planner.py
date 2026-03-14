@@ -12,12 +12,35 @@ from btrfs_to_s3.snapshots import parse_snapshot_name
 from btrfs_to_s3.state import State
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class PlanItem:
-    subvolume: str
+    source_name: str
     action: str
     parent_snapshot: str | None
     reason: str
+
+    def __init__(
+        self,
+        *,
+        source_name: str | None = None,
+        subvolume: str | None = None,
+        action: str,
+        parent_snapshot: str | None,
+        reason: str,
+    ) -> None:
+        if source_name is not None and subvolume is not None:
+            raise TypeError("pass only one of source_name or subvolume")
+        resolved_name = source_name if source_name is not None else subvolume
+        if resolved_name is None:
+            raise TypeError("source_name is required")
+        object.__setattr__(self, "source_name", resolved_name)
+        object.__setattr__(self, "action", action)
+        object.__setattr__(self, "parent_snapshot", parent_snapshot)
+        object.__setattr__(self, "reason", reason)
+
+    @property
+    def subvolume(self) -> str:
+        return self.source_name
 
 
 def plan_backups(
@@ -41,11 +64,11 @@ def plan_backups(
     )
     plans: list[PlanItem] = []
     for name in names:
-        sub_state = state.subvolumes.get(name)
+        source_state = state.sources.get(name)
         plans.append(
-            _plan_subvolume(
+            _plan_source(
                 name,
-                sub_state,
+                source_state,
                 config.schedule.full_every_days,
                 config.schedule.incremental_every_days,
                 now,
@@ -58,57 +81,57 @@ def plan_backups(
 def _config_source_names(config: Config) -> tuple[str, ...]:
     if config.filesystem.backend == "zfs" and config.zfs is not None:
         return config.zfs.source_datasets
-    return tuple(_subvolume_name(path) for path in config.subvolumes.paths)
+    return tuple(_btrfs_source_name(path) for path in config.subvolumes.paths)
 
 
-def _plan_subvolume(
+def _plan_source(
     name: str,
-    sub_state,
+    source_state,
     full_every_days: int,
     incremental_every_days: int,
     now: datetime,
     available_snapshots: set[str] | None,
 ) -> PlanItem:
     last_full_at = _parse_iso_timestamp(
-        sub_state.last_full_at if sub_state else None
+        source_state.last_full_at if source_state else None
     )
     if last_full_at is None or now - last_full_at >= timedelta(days=full_every_days):
         return PlanItem(
-            subvolume=name,
+            source_name=name,
             action="full",
             parent_snapshot=None,
             reason="full_due",
         )
 
-    last_snapshot = sub_state.last_snapshot if sub_state else None
+    last_snapshot = source_state.last_snapshot if source_state else None
     if not last_snapshot:
         return PlanItem(
-            subvolume=name,
+            source_name=name,
             action="full",
             parent_snapshot=None,
             reason="missing_parent",
         )
-    last_manifest = sub_state.last_manifest if sub_state else None
+    last_manifest = source_state.last_manifest if source_state else None
     if not last_manifest:
         return PlanItem(
-            subvolume=name,
+            source_name=name,
             action="full",
             parent_snapshot=None,
             reason="missing_manifest",
         )
     last_snapshot_name = (
-        sub_state.snapshot_name if sub_state else None
+        source_state.snapshot_name if source_state else None
     )
     if not last_snapshot_name:
         return PlanItem(
-            subvolume=name,
+            source_name=name,
             action="full",
             parent_snapshot=None,
             reason="missing_parent",
         )
     if available_snapshots is not None and last_snapshot_name not in available_snapshots:
         return PlanItem(
-            subvolume=name,
+            source_name=name,
             action="full",
             parent_snapshot=None,
             reason="missing_parent",
@@ -117,27 +140,27 @@ def _plan_subvolume(
     last_snapshot_at = _parse_snapshot_timestamp(last_snapshot_name)
     if last_snapshot_at is None:
         return PlanItem(
-            subvolume=name,
+            source_name=name,
             action="inc",
             parent_snapshot=last_snapshot,
             reason="incremental_due",
         )
     if now - last_snapshot_at < timedelta(days=incremental_every_days):
         return PlanItem(
-            subvolume=name,
+            source_name=name,
             action="skip",
             parent_snapshot=last_snapshot,
             reason="incremental_not_due",
         )
     return PlanItem(
-        subvolume=name,
+        source_name=name,
         action="inc",
         parent_snapshot=last_snapshot,
         reason="incremental_due",
     )
 
 
-def _subvolume_name(path: Path) -> str:
+def _btrfs_source_name(path: Path) -> str:
     return path.name
 
 

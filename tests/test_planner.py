@@ -18,7 +18,7 @@ from btrfs_to_s3.config import (
     ZFSConfig,
 )
 from btrfs_to_s3.planner import plan_backups
-from btrfs_to_s3.state import State, SubvolumeState
+from btrfs_to_s3.state import SourceState, State
 
 
 def make_config() -> Config:
@@ -109,19 +109,20 @@ class PlannerTests(unittest.TestCase):
     def test_full_due(self) -> None:
         config = make_config()
         state = State(
-            subvolumes={
-                "data": SubvolumeState(last_full_at="2024-01-01T00:00:00Z")
+            sources={
+                "data": SourceState(last_full_at="2024-01-01T00:00:00Z")
             }
         )
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         plan = plan_backups(config, state, now)
         self.assertEqual(plan[0].action, "full")
+        self.assertEqual(plan[0].source_name, "data")
 
     def test_incremental_due(self) -> None:
         config = make_config()
         state = State(
-            subvolumes={
-                "data": SubvolumeState(
+            sources={
+                "data": SourceState(
                     last_full_at="2025-12-15T00:00:00Z",
                     last_snapshot="data__20260101T000000Z__inc",
                     last_manifest="backup/data/subvol/data/incremental/manifest-20260101T000000Z.json",
@@ -141,8 +142,8 @@ class PlannerTests(unittest.TestCase):
     def test_missing_parent_falls_back_to_full(self) -> None:
         config = make_config()
         state = State(
-            subvolumes={
-                "data": SubvolumeState(
+            sources={
+                "data": SourceState(
                     last_full_at="2025-12-15T00:00:00Z",
                     last_snapshot="data__20260101T000000Z__inc",
                 )
@@ -155,8 +156,8 @@ class PlannerTests(unittest.TestCase):
     def test_missing_manifest_falls_back_to_full(self) -> None:
         config = make_config()
         state = State(
-            subvolumes={
-                "data": SubvolumeState(
+            sources={
+                "data": SourceState(
                     last_full_at="2025-12-15T00:00:00Z",
                     last_snapshot="data__20260101T000000Z__inc",
                     last_manifest=None,
@@ -175,8 +176,8 @@ class PlannerTests(unittest.TestCase):
     def test_incremental_not_due_skips(self) -> None:
         config = make_config()
         state = State(
-            subvolumes={
-                "data": SubvolumeState(
+            sources={
+                "data": SourceState(
                     last_full_at="2025-12-15T00:00:00Z",
                     last_snapshot="data__20260105T000000Z__inc",
                     last_manifest="backup/data/subvol/data/incremental/manifest-20260105T000000Z.json",
@@ -195,8 +196,8 @@ class PlannerTests(unittest.TestCase):
     def test_zfs_incremental_uses_snapshot_identity(self) -> None:
         config = make_zfs_config()
         state = State(
-            subvolumes={
-                "tank/data": SubvolumeState(
+            sources={
+                "tank/data": SourceState(
                     last_full_at="2025-12-15T00:00:00Z",
                     last_snapshot=(
                         "tank/data@btrfs-to-s3-"
@@ -217,10 +218,20 @@ class PlannerTests(unittest.TestCase):
         )
 
         self.assertEqual(plan[0].action, "inc")
+        self.assertEqual(plan[0].source_name, "tank/data")
         self.assertEqual(
             plan[0].parent_snapshot,
             "tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__inc",
         )
+
+    def test_plan_item_accepts_legacy_subvolume_keyword(self) -> None:
+        item = plan_backups(
+            make_config(),
+            State(subvolumes={"data": SourceState(last_full_at="2024-01-01T00:00:00Z")}),
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )[0]
+
+        self.assertEqual(item.subvolume, "data")
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ from btrfs_to_s3.orchestrator import (
     _filter_plan_items,
     _get_s3_client,
     _has_aws_credentials,
+    _source_object_prefix,
 )
 from btrfs_to_s3.planner import PlanItem
 from btrfs_to_s3.restore import ManifestInfo
@@ -171,6 +172,12 @@ class OrchestratorHelperTests(unittest.TestCase):
         self.assertEqual(_build_prefix(""), "")
         self.assertEqual(_build_prefix("backup"), "backup/")
         self.assertEqual(_build_prefix("backup/"), "backup/")
+
+    def test_source_object_prefix_preserves_legacy_subvol_layout(self) -> None:
+        self.assertEqual(
+            _source_object_prefix("backup/", "tank/data"),
+            "backup/subvol/tank/data/",
+        )
 
     def test_has_aws_credentials_looks_for_profile_or_keys(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
@@ -613,6 +620,14 @@ class OrchestratorBackupTests(unittest.TestCase):
                 )
 
             manifest = publish.call_args.kwargs["manifest"]
+            self.assertEqual(
+                publish.call_args.kwargs["manifest_key"],
+                "backup/subvol/data/full/manifest-20260101T000000Z.json",
+            )
+            self.assertEqual(
+                publish.call_args.kwargs["current_key"],
+                "backup/subvol/data/current.json",
+            )
             self.assertEqual(manifest.filesystem, "btrfs")
             self.assertEqual(
                 manifest.snapshot.identity,
@@ -654,6 +669,14 @@ class OrchestratorBackupTests(unittest.TestCase):
                 )
 
             manifest = publish.call_args.kwargs["manifest"]
+            self.assertEqual(
+                publish.call_args.kwargs["manifest_key"],
+                "backup/subvol/tank/data/full/manifest-20260101T000000Z.json",
+            )
+            self.assertEqual(
+                publish.call_args.kwargs["current_key"],
+                "backup/subvol/tank/data/current.json",
+            )
             self.assertEqual(manifest.filesystem, "zfs")
             self.assertEqual(
                 manifest.snapshot.identity,

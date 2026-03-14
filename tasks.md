@@ -439,6 +439,7 @@
   - `python3 -m pytest` passes after the change.
 
 ### Task 41: Fence or eliminate remaining `subvolume`-only internals
+- Status: completed 2026-03-14 09:19 MDT by commit "Fence legacy subvolume compatibility boundaries".
 - Scope: `btrfs_to_s3/manifest.py`, `btrfs_to_s3/state.py`,
   `btrfs_to_s3/planner.py`, `btrfs_to_s3/orchestrator.py`, related tests, and
   docs/comments where the compatibility boundary needs to be stated.

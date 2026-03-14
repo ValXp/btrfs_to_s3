@@ -33,6 +33,9 @@ config and orchestrators are backend-aware.
    - Keep legacy Btrfs configs valid when `[filesystem]` is omitted.
    - Primary commands: `backup`, `restore`.
    - `--source` is the backend-neutral selector; `--subvolume` remains a compatibility alias.
+   - Internal planning/orchestration code uses `source` naming; serialized
+     state, manifest fields, and S3 object keys keep the legacy
+     `subvolumes`, `subvolume`, and `subvol/` names for backward compatibility.
 2. **Lock**
    - File lock to prevent concurrent runs.
 3. **Filesystem backend**

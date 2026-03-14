@@ -27,7 +27,7 @@ class ManifestTests(unittest.TestCase):
         manifest = Manifest(
             version=MANIFEST_VERSION,
             filesystem="btrfs",
-            subvolume="data",
+            source_name="data",
             kind="full",
             created_at="2026-01-01T00:00:00Z",
             snapshot=SnapshotInfo(
@@ -51,6 +51,7 @@ class ManifestTests(unittest.TestCase):
         data = manifest.to_dict()
         self.assertEqual(data["version"], MANIFEST_VERSION)
         self.assertEqual(data["filesystem"], "btrfs")
+        self.assertEqual(manifest.subvolume, "data")
         self.assertEqual(data["snapshot"]["name"], "data__20260101T000000Z__full")
         self.assertEqual(
             data["snapshot"]["identity"],
@@ -63,7 +64,7 @@ class ManifestTests(unittest.TestCase):
         manifest = Manifest(
             version=MANIFEST_VERSION,
             filesystem="zfs",
-            subvolume="tank/data",
+            source_name="tank/data",
             kind="incremental",
             created_at="2026-01-01T00:00:00Z",
             snapshot=SnapshotInfo(
@@ -87,12 +88,30 @@ class ManifestTests(unittest.TestCase):
             "tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__inc",
         )
 
+    def test_manifest_accepts_legacy_subvolume_keyword(self) -> None:
+        manifest = Manifest(
+            version=MANIFEST_VERSION,
+            filesystem="btrfs",
+            subvolume="data",
+            kind="full",
+            created_at="2026-01-01T00:00:00Z",
+            snapshot=SnapshotInfo(name="snap", path="/snap", identity="/snap"),
+            parent_manifest=None,
+            chunks=(),
+            total_bytes=0,
+            chunk_size=0,
+            s3={},
+        )
+
+        self.assertEqual(manifest.source_name, "data")
+        self.assertEqual(manifest.to_dict()["subvolume"], "data")
+
     def test_publish_order(self) -> None:
         client = FakeClient()
         manifest = Manifest(
             version=MANIFEST_VERSION,
             filesystem="btrfs",
-            subvolume="data",
+            source_name="data",
             kind="full",
             created_at="2026-01-01T00:00:00Z",
             snapshot=SnapshotInfo(

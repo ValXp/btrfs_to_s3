@@ -1,4 +1,9 @@
-"""Manifest and current pointer handling."""
+"""Manifest and current pointer handling.
+
+The serialized manifest keeps the legacy ``subvolume`` field so existing
+manifest readers and restore flows remain compatible. In-memory code should
+prefer the backend-neutral ``source_name`` attribute.
+"""
 
 from __future__ import annotations
 
@@ -43,11 +48,11 @@ class ChunkEntry:
         }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Manifest:
     version: int
     filesystem: str
-    subvolume: str
+    source_name: str
     kind: str
     created_at: str
     snapshot: SnapshotInfo
@@ -57,11 +62,48 @@ class Manifest:
     chunk_size: int
     s3: dict[str, Any]
 
+    def __init__(
+        self,
+        *,
+        version: int,
+        filesystem: str,
+        source_name: str | None = None,
+        subvolume: str | None = None,
+        kind: str,
+        created_at: str,
+        snapshot: SnapshotInfo,
+        parent_manifest: str | None,
+        chunks: tuple[ChunkEntry, ...],
+        total_bytes: int,
+        chunk_size: int,
+        s3: dict[str, Any],
+    ) -> None:
+        if source_name is not None and subvolume is not None:
+            raise TypeError("pass only one of source_name or subvolume")
+        resolved_name = source_name if source_name is not None else subvolume
+        if resolved_name is None:
+            raise TypeError("source_name is required")
+        object.__setattr__(self, "version", version)
+        object.__setattr__(self, "filesystem", filesystem)
+        object.__setattr__(self, "source_name", resolved_name)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "created_at", created_at)
+        object.__setattr__(self, "snapshot", snapshot)
+        object.__setattr__(self, "parent_manifest", parent_manifest)
+        object.__setattr__(self, "chunks", chunks)
+        object.__setattr__(self, "total_bytes", total_bytes)
+        object.__setattr__(self, "chunk_size", chunk_size)
+        object.__setattr__(self, "s3", s3)
+
+    @property
+    def subvolume(self) -> str:
+        return self.source_name
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,
             "filesystem": self.filesystem,
-            "subvolume": self.subvolume,
+            "subvolume": self.source_name,
             "kind": self.kind,
             "created_at": self.created_at,
             "snapshot": self.snapshot.to_dict(),

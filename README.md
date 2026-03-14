@@ -21,6 +21,11 @@ Source identifiers are backend-specific:
 - ZFS uses the dataset identifier recorded in manifests and current pointers,
   such as `tank/data`.
 
+The internal planner and orchestrator use backend-neutral "source" naming.
+Persisted state files, manifest JSON, and S3 object keys still keep the legacy
+`subvolumes`, `subvolume`, and `subvol/` names so existing backups remain
+compatible.
+
 ### Manual runs
 
 Manual runs are useful when you want to:

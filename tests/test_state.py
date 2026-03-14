@@ -6,20 +6,26 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from btrfs_to_s3.state import State, SubvolumeState, load_state, save_state
+from btrfs_to_s3.state import (
+    SourceState,
+    State,
+    SubvolumeState,
+    load_state,
+    save_state,
+)
 
 
 class StateTests(unittest.TestCase):
     def test_state_round_trip(self) -> None:
         state = State(
-            subvolumes={
-                "data": SubvolumeState(
+            sources={
+                "data": SourceState(
                     last_snapshot="snap-1",
                     last_snapshot_name="snap-1",
                     last_manifest="man-1",
                     last_full_at="2026-01-01T00:00:00Z",
                 ),
-                "root": SubvolumeState(
+                "root": SourceState(
                     last_snapshot="snap-2",
                     last_snapshot_name="snap-2",
                 ),
@@ -50,24 +56,24 @@ class StateTests(unittest.TestCase):
             }
         )
 
-        subvolume = state.subvolumes["data"]
+        source = state.sources["data"]
         self.assertEqual(
-            subvolume.snapshot_identity,
+            source.snapshot_identity,
             "/srv/snapshots/data__20260101T000000Z__inc",
         )
         self.assertEqual(
-            subvolume.snapshot_name,
+            source.snapshot_name,
             "data__20260101T000000Z__inc",
         )
         self.assertEqual(
-            subvolume.snapshot_path,
+            source.snapshot_path,
             "/srv/snapshots/data__20260101T000000Z__inc",
         )
 
     def test_zfs_state_round_trip(self) -> None:
         state = State(
-            subvolumes={
-                "tank/data": SubvolumeState(
+            sources={
+                "tank/data": SourceState(
                     last_snapshot=(
                         "tank/data@btrfs-to-s3-"
                         "tank_x2f_data__20260101T000000Z__inc"
@@ -85,6 +91,29 @@ class StateTests(unittest.TestCase):
             loaded = load_state(path)
 
         self.assertEqual(loaded, state)
+
+    def test_subvolumes_alias_maps_to_sources(self) -> None:
+        state = State(
+            subvolumes={"data": SubvolumeState(last_snapshot="snap-1")}
+        )
+
+        self.assertEqual(state.sources, state.subvolumes)
+        self.assertIsInstance(state.sources["data"], SourceState)
+
+    def test_from_dict_accepts_sources_key(self) -> None:
+        state = State.from_dict(
+            {
+                "sources": {
+                    "data": {
+                        "last_snapshot": "snap-1",
+                        "last_snapshot_name": "snap-1",
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(state.sources["data"].snapshot_identity, "snap-1")
+        self.assertEqual(state.to_dict()["subvolumes"]["data"]["last_snapshot"], "snap-1")
 
 
 if __name__ == "__main__":
