@@ -12,6 +12,9 @@
 - Until Task 37, ZFS-related code must be testable without requiring a live ZFS
   host. Use unit tests and mocks to verify command construction, sequencing, and
   error handling.
+- Tasks marked `Status: blocked external dependency` are not actionable inside
+  the work loop. Skip them and continue to the next task that is not marked
+  completed or blocked external dependency.
 
 ### Task 24: Harness config schema + ZFS docs groundwork
 - Status: completed 2026-03-13 20:21 MDT by commit "Add ZFS harness config groundwork".
@@ -68,6 +71,7 @@
   - No test in this task requires `zfs` or `zpool` to be installed.
 
 ### Task 26: ZFS setup/teardown fixture scripts
+- Status: completed 2026-03-13 20:36 MDT by commit "Add ZFS fixture setup and teardown scripts".
 - Scope: new `integration_tests/scripts/setup_zfs.py`,
   `integration_tests/scripts/teardown_zfs.py`, new run-state files under
   `integration_tests/run/`, and tests for the script logic.
@@ -95,6 +99,7 @@
   - No test in this task requires a live ZFS host.
 
 ### Task 27: Standalone ZFS probe scripts
+- Status: completed 2026-03-13 20:46 MDT by commit "Add standalone ZFS probe scripts".
 - Scope: new `integration_tests/scripts/run_zfs_snapshot_send_receive.py`,
   `integration_tests/scripts/run_zfs_incremental.py`,
   `integration_tests/scripts/run_zfs_retention.py`, plus tests.
@@ -142,6 +147,7 @@
   - Existing Btrfs harness tests continue to pass.
 
 ### Task 29: Application config groundwork for filesystem backends
+- Status: completed 2026-03-13 21:03 MDT by commit "Add backend-aware application config model".
 - Scope: `btrfs_to_s3/config.py`, `config.example.toml`, `tests/test_config.py`,
   and any small supporting model changes needed outside config.
 - Context: the application config currently assumes path-based Btrfs sources via
@@ -258,6 +264,7 @@
   - No test in this task requires `zfs` or `zpool` to be installed.
 
 ### Task 34: Backend-aware manifest and state schema
+- Status: completed 2026-03-13 21:57 MDT by commit "Make manifest and state schema backend aware".
 - Scope: `btrfs_to_s3/manifest.py`, `btrfs_to_s3/state.py`,
   `btrfs_to_s3/restore.py`, `tests/test_manifest.py`, `tests/test_state.py`,
   `tests/test_restore.py`.
@@ -302,6 +309,7 @@
   - `python3 -m pytest` passes with the new tests included.
 
 ### Task 36: Documentation and example config updates
+- Status: completed 2026-03-13 22:10 MDT by commit "Update backend-aware documentation".
 - Scope: `README.md`, `DESIGN.md`, `config.example.toml`,
   `integration_tests/README.md`, and any systemd/docs examples affected by the
   backend-aware config model.
@@ -323,6 +331,7 @@
     updates.
 
 ### Task 37: Live ZFS harness and application validation
+- Status: blocked external dependency 2026-03-13 22:27 MDT after commit "Fix ZFS live harness blockers".
 - Scope: `integration_tests/scripts/`, harness configs under
   `integration_tests/config/`, `learnings.md`, and any narrowly scoped fixes
   required to make the live flow work.
@@ -336,6 +345,9 @@
   setup, seed, backup, incremental backup, restore, and teardown.
 - Fix any issues discovered during live validation, but do not broaden scope
   beyond what is required to make the ZFS path actually work.
+- Do not attempt this task inside the work loop unless AWS credentials resolve
+  successfully for boto3 and `integration_tests/config/test.env` exists with
+  usable values or profile settings.
 - Acceptance criteria:
   - The standalone ZFS probe scripts succeed on a live ZFS host.
   - The application-backed ZFS harness succeeds through setup, full backup,
@@ -343,3 +355,105 @@
   - Any live-host gotchas discovered during validation are recorded in
     `learnings.md`.
   - `python3 -m pytest` still passes after the live-validation fixes.
+
+### Task 38: Application-backed ZFS harness scripts
+- Scope: `integration_tests/scripts/`, `integration_tests/harness/runner.py`,
+  `integration_tests/README.md`, and tests covering the new script logic.
+- Context: the repo has a ZFS application backend, but the ZFS harness only runs
+  raw probe scripts today. There are no ZFS counterparts to the main
+  application-backed flows already covered for Btrfs, such as full backup,
+  incremental backup, interrupt/retry, restore, and restore verification.
+- Add application-backed ZFS harness entry points that invoke
+  `python3 -m btrfs_to_s3` through `integration_tests/harness/runner.py`
+  instead of calling raw `zfs send`/`zfs receive` directly.
+- Reuse existing generic harness helpers where practical, but the ZFS path must
+  be explicit and testable on its own. If extending existing scripts is cleaner
+  than adding entirely new ones, that is acceptable as long as the ZFS
+  application flow is covered end to end at the script layer.
+- Ensure the ZFS application-backed scripts cover:
+  - full backup
+  - incremental backup after deterministic mutation
+  - interrupted backup followed by rerun
+  - restore of current or explicit manifest
+  - restore verification
+- Acceptance criteria:
+  - The repo contains script entry points for the ZFS application-backed flow,
+    either as dedicated `run_zfs_*.py` scripts or as clearly backend-aware
+    extensions to the existing generic scripts.
+  - Those scripts use `integration_tests/harness/runner.py` to invoke the main
+    application, not the standalone probe helpers.
+  - Unit tests verify the command arguments, backend-specific branching, and log
+    file behavior for the new ZFS application-backed scripts.
+  - No test in this task requires a live ZFS host or live AWS credentials.
+
+### Task 39: Route `run_all.py` through the ZFS application flow
+- Scope: `integration_tests/scripts/run_all.py`,
+  `integration_tests/README.md`, harness tests, and any verification scripts
+  that need backend-aware dispatch.
+- Context: `integration_tests/scripts/run_all.py` currently uses the standalone
+  probe sequence for ZFS:
+  `run_zfs_snapshot_send_receive.py`, `run_zfs_incremental.py`,
+  `run_zfs_retention.py`. That leaves the application-backed ZFS path untested
+  by the main harness and is the largest mismatch against the implementation
+  plan.
+- Change the ZFS `run_all.py` path so it exercises the application-backed flow
+  rather than the raw probe-only flow.
+- Keep the standalone probe scripts available for low-level diagnostics, but
+  they should no longer be the only ZFS coverage path in `run_all.py`.
+- Update docs so the ZFS harness entrypoint accurately reflects whether it runs
+  probes, the application flow, or both.
+- Acceptance criteria:
+  - `run_all.py` selects an application-backed ZFS step sequence that covers at
+    least setup, seed, full backup, mutate, incremental backup, restore,
+    restore verification, and teardown.
+  - If interrupt/retry and retention verification are implemented separately,
+    `run_all.py` includes them or explicitly documents why they are excluded.
+  - Tests cover the exact ZFS step sequence chosen by `run_all.py`.
+  - The standalone ZFS probe scripts remain available but are no longer the only
+    path used by the ZFS harness orchestration.
+
+### Task 40: ZFS restore content verification source resolution
+- Scope: `btrfs_to_s3/orchestrator.py`, `btrfs_to_s3/filesystems/`,
+  `btrfs_to_s3/restore.py`, `btrfs_to_s3/config.py` if needed, and restore/orchestrator tests.
+- Context: ZFS manifests intentionally do not rely on `snapshot.path`, but the
+  current restore verification flow still derives content-verification source
+  data from `snapshot_path`. As a result, ZFS restores currently fall back to
+  metadata-only verification when no local snapshot path exists.
+- Add a backend-aware way to resolve the local verification source for restores,
+  so ZFS restores can run file-content verification on hosts where the source
+  dataset or snapshot is locally accessible.
+- Do not reintroduce a fake filesystem path as the authoritative ZFS snapshot
+  identity. Keep backend-specific snapshot identity intact.
+- If no local verification source is available, preserve the current graceful
+  fallback behavior, but make that decision explicit and testable.
+- Acceptance criteria:
+  - Application-backed ZFS restores can perform content verification when the
+    source dataset/snapshot is locally resolvable on the restore host.
+  - Restore logs or return-path behavior make it clear when verification is
+    metadata-only because no local content source could be resolved.
+  - Tests cover both cases: ZFS content verification with a resolvable source,
+    and metadata-only fallback when no source can be resolved.
+  - `python3 -m pytest` passes after the change.
+
+### Task 41: Fence or eliminate remaining `subvolume`-only internals
+- Scope: `btrfs_to_s3/manifest.py`, `btrfs_to_s3/state.py`,
+  `btrfs_to_s3/planner.py`, `btrfs_to_s3/orchestrator.py`, related tests, and
+  docs/comments where the compatibility boundary needs to be stated.
+- Context: the implementation plan called for the internal model to become
+  backend-neutral, but the repo still uses `subvolume`, `subvolumes`, and
+  `subvol/` as internal names in multiple places. Some of that may be a
+  deliberate compatibility surface, but right now the boundary is not clearly
+  fenced.
+- Refactor internal APIs and data structures toward neutral source naming where
+  practical, or isolate and document legacy naming as a compatibility boundary
+  if changing it would be disruptive.
+- Do not break existing Btrfs manifests, state files, CLI flags, or S3 object
+  layout unless the task also implements and tests a backward-compatible
+  migration strategy.
+- Acceptance criteria:
+  - New or refactored internal APIs use backend-neutral naming for source
+    selection where they are not bound to legacy manifest or S3 formats.
+  - Any remaining `subvolume` or `subvol/` usage is either reduced or clearly
+    isolated to documented compatibility boundaries.
+  - Tests cover the chosen compatibility story for both Btrfs and ZFS.
+  - `python3 -m pytest` passes after the refactor.
