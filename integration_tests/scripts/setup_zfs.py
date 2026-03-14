@@ -91,7 +91,11 @@ def main() -> int:
             for dataset in datasets:
                 _ensure_dataset(
                     dataset,
-                    create_args=zfs_cfg.get("zfs_create_args", ()),
+                    create_args=_dataset_create_args(
+                        dataset,
+                        source_datasets=source_datasets,
+                        base_args=zfs_cfg.get("zfs_create_args", ()),
+                    ),
                     log=log,
                 )
             state["datasets"] = datasets
@@ -161,6 +165,20 @@ def _ensure_dataset(
         if not _is_existing_dataset_error(exc):
             raise
         log.write(f"dataset already exists {dataset}", level="WARN")
+
+
+def _dataset_create_args(
+    dataset: str,
+    *,
+    source_datasets: list[str],
+    base_args: list[str] | tuple[str, ...],
+) -> tuple[str, ...]:
+    create_args = tuple(base_args)
+    if dataset not in source_datasets:
+        return create_args
+    if any("snapdir=" in arg for arg in create_args):
+        return create_args
+    return create_args + ("-o", "snapdir=visible")
 
 
 def _write_pool_state(path: str, state: dict[str, object]) -> None:

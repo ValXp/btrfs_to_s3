@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 
+manifest_lib = importlib.import_module("integration_tests.harness.manifest")
 verify_manifest = importlib.import_module("integration_tests.scripts.verify_manifest")
 verify_retention = importlib.import_module("integration_tests.scripts.verify_retention")
 verify_s3 = importlib.import_module("integration_tests.scripts.verify_s3")
@@ -30,6 +32,73 @@ class RecordingLog:
 
 
 class VerifyManifestScriptTests(unittest.TestCase):
+    def test_main_loads_test_env_before_creating_s3_client(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            config["zfs"]["source_datasets"] = ["data"]
+            config_path = Path(tmpdir) / "test_zfs.toml"
+            config_path.write_text("", encoding="utf-8")
+            (Path(tmpdir) / "test.env").write_text(
+                "AWS_ACCESS_KEY_ID=from-test-env\n"
+                "AWS_SECRET_ACCESS_KEY=secret-from-test-env\n",
+                encoding="utf-8",
+            )
+            log = RecordingLog()
+            payloads = {
+                "prefix/subvol/tank/data/current.json": json.dumps(
+                    {
+                        "manifest_key": "prefix/subvol/tank/data/full/manifest-1.json",
+                        "kind": "full",
+                        "created_at": "2026-03-14T00:00:00Z",
+                    }
+                ).encode("utf-8"),
+                "prefix/subvol/tank/data/full/manifest-1.json": b"{}",
+            }
+            captured_env: dict[str, str] = {}
+
+            def create_client(region: str) -> object:
+                self.assertEqual(region, "us-east-1")
+                captured_env["AWS_ACCESS_KEY_ID"] = os.environ.get(
+                    "AWS_ACCESS_KEY_ID", ""
+                )
+                captured_env["AWS_SECRET_ACCESS_KEY"] = os.environ.get(
+                    "AWS_SECRET_ACCESS_KEY", ""
+                )
+                return object()
+
+            with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+                verify_manifest, "load_config", return_value=config
+            ), mock.patch.object(
+                verify_manifest, "open_log", return_value=log
+            ), mock.patch.object(
+                verify_manifest, "create_s3_client", side_effect=create_client
+            ), mock.patch.object(
+                verify_manifest,
+                "read_object",
+                side_effect=lambda client, bucket, key: payloads[key],
+            ), mock.patch.object(
+                verify_manifest.manifest_lib, "load_manifest", return_value={}
+            ), mock.patch.object(
+                verify_manifest.manifest_lib, "load_schema", return_value={}
+            ), mock.patch.object(
+                verify_manifest.manifest_lib, "validate_manifest", return_value=[]
+            ), mock.patch.object(
+                verify_manifest.manifest_lib,
+                "validate_current_pointer",
+                return_value=[],
+            ), mock.patch.object(
+                verify_manifest.sys,
+                "argv",
+                ["verify_manifest.py", "--config", str(config_path)],
+            ):
+                result = verify_manifest.main()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(captured_env["AWS_ACCESS_KEY_ID"], "from-test-env")
+        self.assertEqual(
+            captured_env["AWS_SECRET_ACCESS_KEY"], "secret-from-test-env"
+        )
+
     def test_main_uses_zfs_sources_for_pointer_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _zfs_config(tmpdir)
@@ -91,6 +160,75 @@ class VerifyManifestScriptTests(unittest.TestCase):
                 "prefix/subvol/tank/home/full/manifest-1.json",
             ],
         )
+
+
+class FullManifestSchemaTests(unittest.TestCase):
+    def test_full_schema_accepts_btrfs_and_zfs_snapshot_shapes(self) -> None:
+        schema = manifest_lib.load_schema(manifest_lib.DEFAULT_FULL_SCHEMA_PATH)
+        manifests = {
+            "btrfs": {
+                "version": 2,
+                "filesystem": "btrfs",
+                "subvolume": "data",
+                "kind": "full",
+                "created_at": "2026-03-14T00:00:00Z",
+                "snapshot": {
+                    "name": "data__20260314T000000Z__full",
+                    "path": "/srv/snapshots/data__20260314T000000Z__full",
+                    "identity": "/srv/snapshots/data__20260314T000000Z__full",
+                    "uuid": None,
+                    "parent_uuid": None,
+                },
+                "parent_manifest": None,
+                "chunks": [
+                    {
+                        "key": "prefix/subvol/data/full/part-00000.bin",
+                        "size": 10,
+                        "sha256": "deadbeef",
+                        "etag": "etag-1",
+                    }
+                ],
+                "total_bytes": 10,
+                "chunk_size": 10,
+                "s3": {"storage_class": "STANDARD"},
+            },
+            "zfs": {
+                "version": 2,
+                "filesystem": "zfs",
+                "subvolume": "tank/data",
+                "kind": "incremental",
+                "created_at": "2026-03-14T00:01:00Z",
+                "snapshot": {
+                    "name": "tank_x2f_data__20260314T000100Z__inc",
+                    "path": None,
+                    "identity": (
+                        "tank/data@"
+                        "btrfs-to-s3-tank_x2f_data__20260314T000100Z__inc"
+                    ),
+                    "uuid": None,
+                    "parent_uuid": None,
+                },
+                "parent_manifest": "prefix/subvol/tank/data/full/manifest-1.json",
+                "chunks": [
+                    {
+                        "key": "prefix/subvol/tank/data/inc/part-00000.bin",
+                        "size": 5,
+                        "sha256": "feedface",
+                        "etag": None,
+                    }
+                ],
+                "total_bytes": 5,
+                "chunk_size": 5,
+                "s3": {"storage_class": "STANDARD"},
+            },
+        }
+
+        for backend, manifest in manifests.items():
+            with self.subTest(backend=backend):
+                self.assertEqual(
+                    manifest_lib.validate_manifest(manifest, schema=schema),
+                    [],
+                )
 
 
 class VerifyS3ScriptTests(unittest.TestCase):

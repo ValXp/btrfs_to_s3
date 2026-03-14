@@ -233,10 +233,10 @@ class ZFSRestoreOperations(RestoreOperations):
         try:
             if process.poll() is None:
                 process.terminate()
-            _stdout, stderr = process.communicate(timeout=timeout)
+            _code, stderr = _finalize_process(process, timeout=timeout)
         except subprocess.TimeoutExpired:
             process.kill()
-            _stdout, stderr = process.communicate()
+            _code, stderr = _finalize_process(process)
         receive_error = _decode_stderr(stderr)
         cleanup_error = self._cleanup_failed_dataset(context)
         if receive_error and cleanup_error:
@@ -251,8 +251,7 @@ class ZFSRestoreOperations(RestoreOperations):
         target: Path,
     ) -> None:
         context = self._active_receives.pop(id(stream.process), None)
-        _stdout, stderr = stream.process.communicate()
-        code = stream.process.returncode
+        code, stderr = _finalize_process(stream.process)
         if code != 0:
             cleanup_error = self._cleanup_failed_dataset(
                 context or _ReceiveContext(self._target_dataset(target), target)
@@ -455,3 +454,23 @@ def _dataset_mount_path(
 
 def _decode_stderr(stderr: bytes) -> str:
     return stderr.decode("utf-8", errors="replace").strip()
+
+
+def _finalize_process(
+    process: subprocess.Popen[bytes],
+    *,
+    timeout: float | None = None,
+) -> tuple[int | None, bytes]:
+    stdin = getattr(process, "stdin", None)
+    if stdin is not None and getattr(stdin, "closed", False):
+        if timeout is None:
+            code = process.wait()
+        else:
+            code = process.wait(timeout=timeout)
+        stderr_pipe = getattr(process, "stderr", None)
+        stderr = stderr_pipe.read() if stderr_pipe is not None else b""
+        if not isinstance(stderr, bytes):
+            stderr = b""
+        return getattr(process, "returncode", code), stderr
+    _stdout, stderr = process.communicate(timeout=timeout)
+    return getattr(process, "returncode", None), stderr

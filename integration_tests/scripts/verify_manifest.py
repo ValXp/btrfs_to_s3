@@ -12,6 +12,7 @@ if TESTING_DIR not in sys.path:
 
 from harness.aws import create_s3_client, read_object
 from harness.config import load_config
+from harness.env import load_env
 from harness.filesystem import source_identifiers
 from harness.logs import open_log
 from harness import manifest as manifest_lib
@@ -35,6 +36,10 @@ def main() -> int:
     config_path = os.path.abspath(args.config)
     config = load_config(config_path)
     paths = config["paths"]
+
+    env_path = os.path.join(os.path.dirname(config_path), "test.env")
+    if os.path.exists(env_path):
+        load_env(env_path, override=False)
 
     manifest_path = args.manifest
     if manifest_path is None:

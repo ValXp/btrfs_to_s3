@@ -477,6 +477,64 @@ class VerifyRestoreScriptTests(unittest.TestCase):
         verify_metadata_mock.assert_called_once_with(config, str(target_dir))
         self.assertIn(("INFO", "restore verification passed"), log.entries)
 
+    def test_main_falls_back_to_metadata_only_when_zfs_source_snapshot_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            config_path = str(Path(tmpdir) / "test_zfs.toml")
+            mount_root = Path(config["zfs"]["mount_root"])
+            target_dir = mount_root / "restore" / "data-target"
+            target_dir.mkdir(parents=True)
+
+            metadata_path = (
+                Path(config["paths"]["run_dir"]) / verify_restore.RESTORE_TARGETS_FILE
+            )
+            metadata_path.parent.mkdir(parents=True, exist_ok=True)
+            metadata_path.write_text(
+                json.dumps(
+                    {
+                        "targets": [
+                            {
+                                "source": "tank/data",
+                                "target_path": str(target_dir),
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            log = RecordingLog()
+
+            with mock.patch.object(
+                verify_restore, "load_config", return_value=config
+            ), mock.patch.object(
+                verify_restore, "open_log", return_value=log
+            ), mock.patch.object(
+                verify_restore.zfs_harness,
+                "list_snapshots",
+                return_value=["tank/data@probe-data__20260313T221500Z__full"],
+            ), mock.patch.object(
+                verify_restore, "_verify_metadata"
+            ) as verify_metadata_mock, mock.patch.object(
+                verify_restore, "_verify_content"
+            ) as verify_content_mock, mock.patch.object(
+                verify_restore.sys,
+                "argv",
+                ["verify_restore.py", "--config", config_path, "--source", "tank/data"],
+            ):
+                result = verify_restore.main()
+
+        self.assertEqual(result, 0)
+        verify_metadata_mock.assert_called_once_with(config, str(target_dir))
+        verify_content_mock.assert_not_called()
+        self.assertIn(
+            (
+                "WARN",
+                "source snapshot unavailable for tank/data; verifying restore metadata only",
+            ),
+            log.entries,
+        )
+        self.assertIn(("INFO", "restore verification passed"), log.entries)
+
 
 def _zfs_config(tmpdir: str) -> dict[str, object]:
     run_dir = Path(tmpdir) / "integration_tests" / "run" / "zfs"

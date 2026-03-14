@@ -2,6 +2,7 @@
   "type": "object",
   "required": [
     "version",
+    "filesystem",
     "subvolume",
     "kind",
     "created_at",
@@ -16,6 +17,13 @@
     "version": {
       "type": "integer",
       "minimum": 1
+    },
+    "filesystem": {
+      "type": "string",
+      "enum": [
+        "btrfs",
+        "zfs"
+      ]
     },
     "subvolume": {
       "type": "string"
@@ -35,6 +43,7 @@
       "required": [
         "name",
         "path",
+        "identity",
         "uuid",
         "parent_uuid"
       ],
@@ -43,6 +52,12 @@
           "type": "string"
         },
         "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identity": {
           "type": "string"
         },
         "uuid": {

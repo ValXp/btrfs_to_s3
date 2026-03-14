@@ -21,7 +21,13 @@ from btrfs_to_s3.config import (
     SubvolumesConfig,
     ZFSConfig,
 )
-from btrfs_to_s3.filesystems.base import RestoreBackendError, SendStream, SnapshotError, StreamError
+from btrfs_to_s3.filesystems.base import (
+    ReceiveStream,
+    RestoreBackendError,
+    SendStream,
+    SnapshotError,
+    StreamError,
+)
 from btrfs_to_s3.filesystems.factory import create_filesystem_backend
 from btrfs_to_s3.filesystems.zfs import (
     ZFSRestoreOperations,
@@ -354,6 +360,33 @@ class ZFSRestoreOperationsTests(unittest.TestCase):
 
         self.assertIn("receive failed", str(context.exception))
         self.assertIn("busy dataset", str(context.exception))
+
+    def test_complete_receive_avoids_communicate_after_stdin_closed(self) -> None:
+        process = mock.Mock()
+        process.stdin = io.BytesIO()
+        process.stdin.close()
+        process.stderr = io.BytesIO(b"")
+        process.wait.return_value = 0
+        process.returncode = 0
+        process.communicate.side_effect = AssertionError(
+            "communicate should not be called"
+        )
+        operations = ZFSRestoreOperations(
+            receive_parent_dataset="tank/restore",
+            restore_base_dir=Path("/tank/restore"),
+            runner=mock.Mock(),
+        )
+
+        operations.complete_receive(
+            ReceiveStream(
+                process=process,
+                stdin=io.BytesIO(),
+                created_path=Path("/tank/restore/data__restore__20260101"),
+            ),
+            Path("/tank/restore/data__restore__20260101"),
+        )
+
+        process.wait.assert_called_once_with()
 
     def test_finalize_restore_sets_readonly_off(self) -> None:
         runner = mock.Mock(

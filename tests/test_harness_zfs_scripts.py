@@ -68,15 +68,23 @@ class SetupZFSScriptTests(unittest.TestCase):
                         ),
                         mock.call.create_dataset(
                             f'{config["zfs"]["pool_name"]}/data',
-                            create_args=config["zfs"]["zfs_create_args"],
+                            create_args=(
+                                *config["zfs"]["zfs_create_args"],
+                                "-o",
+                                "snapdir=visible",
+                            ),
                         ),
                         mock.call.create_dataset(
                             f'{config["zfs"]["pool_name"]}/home',
-                            create_args=config["zfs"]["zfs_create_args"],
+                            create_args=(
+                                *config["zfs"]["zfs_create_args"],
+                                "-o",
+                                "snapdir=visible",
+                            ),
                         ),
                         mock.call.create_dataset(
                             f'{config["zfs"]["pool_name"]}/restore',
-                            create_args=config["zfs"]["zfs_create_args"],
+                            create_args=tuple(config["zfs"]["zfs_create_args"]),
                         ),
                     ],
                 )

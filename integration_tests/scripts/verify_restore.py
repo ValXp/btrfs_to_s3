@@ -76,30 +76,46 @@ def main() -> int:
             return 1
 
         for source in sources:
+            source_path: str | None = None
             try:
-                source_path = _resolve_source_snapshot(
-                    args.source_snapshot,
-                    config,
-                    source,
-                )
                 target_path = _resolve_target_path(
                     args,
                     config,
                     source,
                     require_mapping=len(sources) > 1,
                 )
+                source_path = _resolve_source_snapshot(
+                    args.source_snapshot,
+                    config,
+                    source,
+                )
             except ValueError as exc:
-                log.write(str(exc), level="ERROR")
-                return 1
+                if not _should_verify_metadata_only(
+                    args.source_snapshot,
+                    config,
+                    exc,
+                ):
+                    log.write(str(exc), level="ERROR")
+                    return 1
+                log.write(str(exc), level="WARN")
+                log.write(
+                    f"source snapshot unavailable for {source}; "
+                    "verifying restore metadata only",
+                    level="WARN",
+                )
 
-            log.write(f"source snapshot: {source_path}")
             log.write(f"target restore: {target_path}")
+            if source_path is not None:
+                log.write(f"source snapshot: {source_path}")
 
             try:
                 _verify_metadata(config, target_path)
             except (RuntimeError, subprocess.CalledProcessError) as exc:
                 log.write(str(exc), level="ERROR")
                 return 1
+
+            if source_path is None:
+                continue
 
             try:
                 mismatch = _verify_content(
@@ -161,6 +177,21 @@ def _resolve_source_snapshot(
     if backend_name(config) == "zfs":
         return _resolve_zfs_source_snapshot(config, source)
     return _resolve_btrfs_source_snapshot(config["paths"]["snapshots_dir"], source)
+
+
+def _should_verify_metadata_only(
+    requested_source_snapshot: str | None,
+    config: dict,
+    exc: ValueError,
+) -> bool:
+    if requested_source_snapshot is not None:
+        return False
+    if backend_name(config) != "zfs":
+        return False
+    message = str(exc)
+    return message.startswith("source snapshot missing:") or message.startswith(
+        "no ZFS snapshots found"
+    )
 
 
 def _resolve_btrfs_source_snapshot(snapshots_dir: str, source: str) -> str:
