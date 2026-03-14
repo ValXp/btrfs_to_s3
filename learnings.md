@@ -49,3 +49,5 @@ Learnings
 - FYI: `create_filesystem_backend` is now the orchestrator seam for backend selection; until the ZFS application backend lands, a ZFS config will fail at runtime with `event=filesystem_backend_failed`.
 - FYI: the ZFS application backend stores the authoritative snapshot reference as `dataset@<prefix>-<encoded-name>__<timestamp>__<kind>` and uses the encoded portion for snapshot listing/pruning logic.
 - FYI: ZFS restore target mapping assumes `restore.target_base_dir` is the mounted path of `zfs.receive_parent_dataset`; child target paths map directly to child datasets under that receive parent.
+- FYI: manifest v2 now records `filesystem` at the top level and `snapshot.identity` inside the snapshot metadata; restore still defaults missing `filesystem` to legacy Btrfs and falls back from missing `snapshot.identity` to `snapshot.path`.
+- FYI: state now treats `last_snapshot` as the backend snapshot identity and persists optional `last_snapshot_name`/`last_snapshot_path`; planner uses the name for availability checks and the identity for incremental send parents.

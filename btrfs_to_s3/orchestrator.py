@@ -22,6 +22,7 @@ from btrfs_to_s3.filesystems import (
 )
 from btrfs_to_s3.lock import LockError, LockFile
 from btrfs_to_s3.manifest import (
+    MANIFEST_VERSION,
     ChunkEntry,
     CurrentPointer,
     Manifest,
@@ -229,8 +230,21 @@ class BackupOrchestrator:
         subvol_name = source.identifier
         subvol_state = state_subvols.get(subvol_name, SubvolumeState())
         action, parent_snapshot, parent_manifest = self._resolve_parents(
-            action, plan_item, subvol_name, subvol_state
+            action,
+            plan_item,
+            subvol_name,
+            subvol_state,
+            backend.name,
         )
+        parent_snapshot_name = None
+        if action == "inc":
+            parent_snapshot_name = subvol_state.snapshot_name
+            if (
+                parent_snapshot_name is None
+                and plan_item.parent_snapshot
+                and backend.name == "btrfs"
+            ):
+                parent_snapshot_name = Path(plan_item.parent_snapshot).name
         effective_kind = "full" if action == "full" else "incremental"
         snapshot_kind = "full" if action == "full" else "inc"
 
@@ -259,6 +273,7 @@ class BackupOrchestrator:
 
         manifest_key = self._publish_manifest(
             uploader.client,
+            backend.name,
             subvol_name,
             effective_kind,
             timestamp,
@@ -281,6 +296,10 @@ class BackupOrchestrator:
 
         state_subvols[subvol_name] = SubvolumeState(
             last_snapshot=str(snapshot.path),
+            last_snapshot_name=snapshot.name,
+            last_snapshot_path=str(snapshot.path)
+            if backend.name == "btrfs"
+            else None,
             last_manifest=manifest_key,
             last_full_at=timestamp
             if effective_kind == "full"
@@ -289,7 +308,7 @@ class BackupOrchestrator:
         backend.snapshot_operations.prune_snapshots(
             subvol_name,
             self.config.snapshots.retain,
-            keep_name=parent_snapshot.name if parent_snapshot else None,
+            keep_name=parent_snapshot_name,
         )
         return 0
 
@@ -314,6 +333,7 @@ class BackupOrchestrator:
     def _publish_manifest(
         self,
         client,
+        filesystem: str,
         subvol_name: str,
         effective_kind: str,
         timestamp: str,
@@ -328,14 +348,18 @@ class BackupOrchestrator:
             f"manifest-{timestamp}.json"
         )
         current_key = f"{prefix}subvol/{subvol_name}/current.json"
+        snapshot_identity = str(snapshot.path)
+        snapshot_path = snapshot_identity if filesystem == "btrfs" else None
         manifest = Manifest(
-            version=1,
+            version=MANIFEST_VERSION,
+            filesystem=filesystem,
             subvolume=subvol_name,
             kind=effective_kind,
             created_at=timestamp,
             snapshot=SnapshotInfo(
                 name=snapshot.name,
-                path=str(snapshot.path),
+                path=snapshot_path,
+                identity=snapshot_identity,
                 uuid=None,
                 parent_uuid=None,
             ),
@@ -383,15 +407,22 @@ class BackupOrchestrator:
         plan_item: PlanItem,
         subvol_name: str,
         subvol_state: SubvolumeState,
+        filesystem: str,
     ) -> tuple[str, Path | None, str | None]:
         parent_snapshot = None
         if action == "inc" and plan_item.parent_snapshot:
             parent_snapshot = Path(plan_item.parent_snapshot)
-            if not parent_snapshot.exists():
+            parent_snapshot_path = (
+                subvol_state.snapshot_path or plan_item.parent_snapshot
+            )
+            if filesystem == "btrfs" and (
+                parent_snapshot_path is None
+                or not Path(parent_snapshot_path).exists()
+            ):
                 self.logger.info(
                     "event=backup_parent_missing subvolume=%s path=%s",
                     subvol_name,
-                    parent_snapshot,
+                    parent_snapshot_path or parent_snapshot,
                 )
                 action = "full"
                 parent_snapshot = None

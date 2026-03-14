@@ -38,6 +38,12 @@ class ManifestInfo:
     chunks: tuple[ChunkInfo, ...]
     s3: dict[str, Any]
     snapshot_path: str | None
+    filesystem: str = "btrfs"
+    snapshot_identity: str | None = None
+
+    @property
+    def snapshot_reference(self) -> str | None:
+        return self.snapshot_identity or self.snapshot_path
 
 
 def needs_restore(storage_class: str | None) -> bool:
@@ -100,6 +106,7 @@ def fetch_manifest(client, bucket: str, key: str) -> ManifestInfo:
 
 
 def parse_manifest(payload: dict[str, Any], key: str) -> ManifestInfo:
+    filesystem = _parse_filesystem(payload, key)
     kind = payload.get("kind")
     if not isinstance(kind, str) or not kind:
         raise RestoreError(f"{key} missing kind")
@@ -128,7 +135,12 @@ def parse_manifest(payload: dict[str, Any], key: str) -> ManifestInfo:
     s3 = payload.get("s3", {})
     if not isinstance(s3, dict):
         raise RestoreError(f"{key} invalid s3 metadata")
+    snapshot_identity = _parse_snapshot_identity(payload, key)
     snapshot_path = _parse_snapshot_path(payload, key)
+    if snapshot_identity is None:
+        snapshot_identity = snapshot_path
+    if filesystem == "zfs" and snapshot_identity is None:
+        raise RestoreError(f"{key} missing snapshot identity")
     return ManifestInfo(
         key=key,
         kind=kind,
@@ -136,6 +148,8 @@ def parse_manifest(payload: dict[str, Any], key: str) -> ManifestInfo:
         chunks=tuple(chunks),
         s3=s3,
         snapshot_path=snapshot_path,
+        filesystem=filesystem,
+        snapshot_identity=snapshot_identity,
     )
 
 
@@ -350,7 +364,7 @@ def _apply_manifest_stream(
 ) -> int:
     try:
         receive_stream = restore_operations.open_receive(
-            target, manifest.snapshot_path
+            target, manifest.snapshot_reference
         )
     except RestoreBackendError as exc:
         raise RestoreError(str(exc)) from exc
@@ -394,6 +408,29 @@ def _fetch_json(client, bucket: str, key: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RestoreError(f"{key} must be a JSON object")
     return payload
+
+
+def _parse_filesystem(payload: dict[str, Any], key: str) -> str:
+    filesystem = payload.get("filesystem", "btrfs")
+    if not isinstance(filesystem, str) or not filesystem:
+        raise RestoreError(f"{key} invalid filesystem")
+    if filesystem not in {"btrfs", "zfs"}:
+        raise RestoreError(f"{key} unsupported filesystem {filesystem!r}")
+    return filesystem
+
+
+def _parse_snapshot_identity(payload: dict[str, Any], key: str) -> str | None:
+    snapshot = payload.get("snapshot")
+    if snapshot is None:
+        return None
+    if not isinstance(snapshot, dict):
+        raise RestoreError(f"{key} invalid snapshot metadata")
+    identity = snapshot.get("identity")
+    if identity is None:
+        return None
+    if not isinstance(identity, str) or not identity:
+        raise RestoreError(f"{key} invalid snapshot identity")
+    return identity
 
 
 def _parse_snapshot_path(payload: dict[str, Any], key: str) -> str | None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from btrfs_to_s3.manifest import (
+    MANIFEST_VERSION,
     ChunkEntry,
     CurrentPointer,
     Manifest,
@@ -24,13 +25,15 @@ class FakeClient:
 class ManifestTests(unittest.TestCase):
     def test_manifest_schema(self) -> None:
         manifest = Manifest(
-            version=1,
+            version=MANIFEST_VERSION,
+            filesystem="btrfs",
             subvolume="data",
             kind="full",
             created_at="2026-01-01T00:00:00Z",
             snapshot=SnapshotInfo(
                 name="data__20260101T000000Z__full",
                 path="/srv/snapshots/data__20260101T000000Z__full",
+                identity="/srv/snapshots/data__20260101T000000Z__full",
             ),
             parent_manifest=None,
             chunks=(
@@ -46,21 +49,56 @@ class ManifestTests(unittest.TestCase):
             s3={"bucket": "bucket", "region": "us-east-1"},
         )
         data = manifest.to_dict()
-        self.assertEqual(data["version"], 1)
+        self.assertEqual(data["version"], MANIFEST_VERSION)
+        self.assertEqual(data["filesystem"], "btrfs")
         self.assertEqual(data["snapshot"]["name"], "data__20260101T000000Z__full")
+        self.assertEqual(
+            data["snapshot"]["identity"],
+            "/srv/snapshots/data__20260101T000000Z__full",
+        )
         self.assertEqual(len(data["chunks"]), 1)
         self.assertEqual(data["chunks"][0]["key"], "subvol/data/full/part-00000.bin")
+
+    def test_manifest_schema_supports_zfs_identity(self) -> None:
+        manifest = Manifest(
+            version=MANIFEST_VERSION,
+            filesystem="zfs",
+            subvolume="tank/data",
+            kind="incremental",
+            created_at="2026-01-01T00:00:00Z",
+            snapshot=SnapshotInfo(
+                name="tank_x2f_data__20260101T000000Z__inc",
+                path=None,
+                identity="tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__inc",
+            ),
+            parent_manifest="manifests/base.json",
+            chunks=(),
+            total_bytes=0,
+            chunk_size=0,
+            s3={"bucket": "bucket", "region": "us-east-1"},
+        )
+
+        data = manifest.to_dict()
+
+        self.assertEqual(data["filesystem"], "zfs")
+        self.assertIsNone(data["snapshot"]["path"])
+        self.assertEqual(
+            data["snapshot"]["identity"],
+            "tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__inc",
+        )
 
     def test_publish_order(self) -> None:
         client = FakeClient()
         manifest = Manifest(
-            version=1,
+            version=MANIFEST_VERSION,
+            filesystem="btrfs",
             subvolume="data",
             kind="full",
             created_at="2026-01-01T00:00:00Z",
             snapshot=SnapshotInfo(
                 name="data__20260101T000000Z__full",
                 path="/srv/snapshots/data__20260101T000000Z__full",
+                identity="/srv/snapshots/data__20260101T000000Z__full",
             ),
             parent_manifest=None,
             chunks=(),

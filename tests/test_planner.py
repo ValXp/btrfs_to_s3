@@ -8,12 +8,14 @@ from pathlib import Path
 
 from btrfs_to_s3.config import (
     Config,
+    FilesystemConfig,
     GlobalConfig,
     RestoreConfig,
     S3Config,
     ScheduleConfig,
     SnapshotsConfig,
     SubvolumesConfig,
+    ZFSConfig,
 )
 from btrfs_to_s3.planner import plan_backups
 from btrfs_to_s3.state import State, SubvolumeState
@@ -53,6 +55,52 @@ def make_config() -> Config:
             wait_for_restore=True,
             restore_timeout_seconds=3600,
             restore_tier="Standard",
+        ),
+    )
+
+
+def make_zfs_config() -> Config:
+    return Config(
+        global_cfg=GlobalConfig(
+            log_level="info",
+            state_path=Path("/tmp/state.json"),
+            lock_path=Path("/tmp/lock"),
+            spool_dir=Path("/tmp/spool"),
+            spool_size_bytes=1024,
+        ),
+        schedule=ScheduleConfig(
+            full_every_days=180,
+            incremental_every_days=7,
+            run_at="02:00",
+        ),
+        snapshots=SnapshotsConfig(base_dir=None, retain=2),
+        subvolumes=SubvolumesConfig(paths=()),
+        s3=S3Config(
+            bucket="bucket",
+            region="us-east-1",
+            prefix="backup/data",
+            chunk_size_bytes=2048,
+            storage_class_chunks="STANDARD",
+            storage_class_manifest="STANDARD",
+            concurrency=1,
+            spool_enabled=False,
+            sse="AES256",
+        ),
+        restore=RestoreConfig(
+            target_base_dir=Path("/srv/restore"),
+            verify_mode="full",
+            sample_max_files=100,
+            wait_for_restore=True,
+            restore_timeout_seconds=3600,
+            restore_tier="Standard",
+        ),
+        filesystem=FilesystemConfig(backend="zfs"),
+        zfs=ZFSConfig(
+            pool_name="tank",
+            mount_root=Path("/tank"),
+            source_datasets=("tank/data",),
+            receive_parent_dataset="tank/restore",
+            snapshot_prefix="btrfs-to-s3",
         ),
     )
 
@@ -143,6 +191,36 @@ class PlannerTests(unittest.TestCase):
             available_snapshots={"data__20260105T000000Z__inc"},
         )
         self.assertEqual(plan[0].action, "skip")
+
+    def test_zfs_incremental_uses_snapshot_identity(self) -> None:
+        config = make_zfs_config()
+        state = State(
+            subvolumes={
+                "tank/data": SubvolumeState(
+                    last_full_at="2025-12-15T00:00:00Z",
+                    last_snapshot=(
+                        "tank/data@btrfs-to-s3-"
+                        "tank_x2f_data__20260101T000000Z__inc"
+                    ),
+                    last_snapshot_name="tank_x2f_data__20260101T000000Z__inc",
+                    last_manifest="backup/data/subvol/tank/data/incremental/manifest-20260101T000000Z.json",
+                )
+            }
+        )
+
+        now = datetime(2026, 1, 10, tzinfo=timezone.utc)
+        plan = plan_backups(
+            config,
+            state,
+            now,
+            available_snapshots={"tank_x2f_data__20260101T000000Z__inc"},
+        )
+
+        self.assertEqual(plan[0].action, "inc")
+        self.assertEqual(
+            plan[0].parent_snapshot,
+            "tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__inc",
+        )
 
 
 if __name__ == "__main__":

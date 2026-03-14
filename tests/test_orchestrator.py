@@ -584,6 +584,82 @@ class OrchestratorBackupTests(unittest.TestCase):
             manifest_path = Path(temp_dir) / "manifest.json"
             self.assertTrue(manifest_path.exists())
 
+    def test_publish_manifest_writes_btrfs_filesystem_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir)
+            orchestrator = BackupOrchestrator(config)
+            snapshot = Snapshot(
+                name="data__20260101T000000Z__full",
+                path=Path(temp_dir) / "snapshots" / "data__20260101T000000Z__full",
+                kind="full",
+                created_at=datetime.now(timezone.utc),
+            )
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.publish_manifest"
+            ) as publish:
+                orchestrator._publish_manifest(
+                    object(),
+                    "btrfs",
+                    "data",
+                    "full",
+                    "20260101T000000Z",
+                    "backup/",
+                    snapshot,
+                    None,
+                    [],
+                    0,
+                )
+
+            manifest = publish.call_args.kwargs["manifest"]
+            self.assertEqual(manifest.filesystem, "btrfs")
+            self.assertEqual(
+                manifest.snapshot.identity,
+                str(snapshot.path),
+            )
+            self.assertEqual(
+                manifest.snapshot.path,
+                str(snapshot.path),
+            )
+
+    def test_publish_manifest_writes_zfs_snapshot_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_zfs_config(temp_dir)
+            orchestrator = BackupOrchestrator(config)
+            snapshot = Snapshot(
+                name="tank_x2f_data__20260101T000000Z__full",
+                path=Path(
+                    "tank/data@btrfs-to-s3-"
+                    "tank_x2f_data__20260101T000000Z__full"
+                ),
+                kind="full",
+                created_at=datetime.now(timezone.utc),
+            )
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.publish_manifest"
+            ) as publish:
+                orchestrator._publish_manifest(
+                    object(),
+                    "zfs",
+                    "tank/data",
+                    "full",
+                    "20260101T000000Z",
+                    "backup/",
+                    snapshot,
+                    None,
+                    [],
+                    0,
+                )
+
+            manifest = publish.call_args.kwargs["manifest"]
+            self.assertEqual(manifest.filesystem, "zfs")
+            self.assertEqual(
+                manifest.snapshot.identity,
+                "tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__full",
+            )
+            self.assertIsNone(manifest.snapshot.path)
+
 
 class OrchestratorRestoreTests(unittest.TestCase):
     def test_restore_passes_backend_restore_operations(self) -> None:

@@ -292,6 +292,75 @@ class RestoreTests(unittest.TestCase):
         manifest = restore.parse_manifest(payload, "manifest.json")
         self.assertIsNone(manifest.parent_manifest)
 
+    def test_parse_manifest_defaults_legacy_btrfs_identity_to_path(self) -> None:
+        manifest = restore.parse_manifest(
+            {
+                "kind": "full",
+                "chunks": [{"key": "a", "sha256": "x", "size": 1}],
+                "snapshot": {"path": "/srv/snapshots/data__20260101T000000Z__full"},
+            },
+            "manifest.json",
+        )
+
+        self.assertEqual(manifest.filesystem, "btrfs")
+        self.assertEqual(
+            manifest.snapshot_identity,
+            "/srv/snapshots/data__20260101T000000Z__full",
+        )
+        self.assertEqual(
+            manifest.snapshot_reference,
+            "/srv/snapshots/data__20260101T000000Z__full",
+        )
+
+    def test_parse_manifest_reads_zfs_identity(self) -> None:
+        manifest = restore.parse_manifest(
+            {
+                "filesystem": "zfs",
+                "kind": "full",
+                "chunks": [{"key": "a", "sha256": "x", "size": 1}],
+                "snapshot": {
+                    "identity": (
+                        "tank/data@btrfs-to-s3-"
+                        "tank_x2f_data__20260101T000000Z__full"
+                    ),
+                    "path": None,
+                },
+            },
+            "manifest.json",
+        )
+
+        self.assertEqual(manifest.filesystem, "zfs")
+        self.assertEqual(
+            manifest.snapshot_identity,
+            "tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__full",
+        )
+        self.assertIsNone(manifest.snapshot_path)
+
+    def test_parse_manifest_rejects_invalid_filesystem(self) -> None:
+        with self.assertRaises(restore.RestoreError) as context:
+            restore.parse_manifest(
+                {
+                    "filesystem": "xfs",
+                    "kind": "full",
+                    "chunks": [{"key": "a", "sha256": "x", "size": 1}],
+                },
+                "manifest.json",
+            )
+        self.assertIn("unsupported filesystem", str(context.exception))
+
+    def test_parse_manifest_rejects_zfs_without_snapshot_identity(self) -> None:
+        with self.assertRaises(restore.RestoreError) as context:
+            restore.parse_manifest(
+                {
+                    "filesystem": "zfs",
+                    "kind": "full",
+                    "chunks": [{"key": "a", "sha256": "x", "size": 1}],
+                    "snapshot": {"path": None},
+                },
+                "manifest.json",
+            )
+        self.assertIn("missing snapshot identity", str(context.exception))
+
     def test_hash_mismatch_raises(self) -> None:
         client = FakeS3()
         client.objects["chunk.bin"] = b"payload"

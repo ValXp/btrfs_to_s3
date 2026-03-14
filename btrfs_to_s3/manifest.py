@@ -6,18 +6,22 @@ import json
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+MANIFEST_VERSION = 2
+
 
 @dataclass(frozen=True)
 class SnapshotInfo:
     name: str
-    path: str
+    path: str | None
     uuid: str | None = None
     parent_uuid: str | None = None
+    identity: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "path": self.path,
+            "identity": self.identity,
             "uuid": self.uuid,
             "parent_uuid": self.parent_uuid,
         }
@@ -42,6 +46,7 @@ class ChunkEntry:
 @dataclass(frozen=True)
 class Manifest:
     version: int
+    filesystem: str
     subvolume: str
     kind: str
     created_at: str
@@ -55,6 +60,7 @@ class Manifest:
     def to_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,
+            "filesystem": self.filesystem,
             "subvolume": self.subvolume,
             "kind": self.kind,
             "created_at": self.created_at,
