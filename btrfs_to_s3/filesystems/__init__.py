@@ -26,6 +26,11 @@ from btrfs_to_s3.filesystems.btrfs import (
     BtrfsSendOperations,
     BtrfsSnapshotManager,
 )
+from btrfs_to_s3.filesystems.zfs import (
+    ZFSRestoreOperations,
+    ZFSSendOperations,
+    ZFSSnapshotManager,
+)
 
 __all__ = [
     "BtrfsRestoreOperations",
@@ -44,6 +49,9 @@ __all__ = [
     "SnapshotError",
     "SnapshotOperations",
     "StreamError",
+    "ZFSRestoreOperations",
+    "ZFSSendOperations",
+    "ZFSSnapshotManager",
     "create_filesystem_backend",
     "parse_snapshot_name",
     "select_retention",

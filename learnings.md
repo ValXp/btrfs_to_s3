@@ -47,3 +47,5 @@ Learnings
 - FYI: `restore.py` now treats receive/finalize/metadata checks as backend operations; restore seam tests should inject `restore_operations` instead of patching `subprocess` in `restore.py`.
 - FYI: backup and restore requests now use backend-neutral `source_names`/`source_name` internally; the CLI still accepts `--subvolume` as a compatibility alias to `--source`.
 - FYI: `create_filesystem_backend` is now the orchestrator seam for backend selection; until the ZFS application backend lands, a ZFS config will fail at runtime with `event=filesystem_backend_failed`.
+- FYI: the ZFS application backend stores the authoritative snapshot reference as `dataset@<prefix>-<encoded-name>__<timestamp>__<kind>` and uses the encoded portion for snapshot listing/pruning logic.
+- FYI: ZFS restore target mapping assumes `restore.target_base_dir` is the mounted path of `zfs.receive_parent_dataset`; child target paths map directly to child datasets under that receive parent.

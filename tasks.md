@@ -236,6 +236,7 @@
   - `python3 -m pytest` passes after the refactor.
 
 ### Task 33: ZFS application backend implementation
+- Status: completed 2026-03-13 21:47 MDT by commit "Add ZFS application backend".
 - Scope: new `btrfs_to_s3/filesystems/zfs.py`, related tests, and any small
   shared helpers needed for ZFS snapshot identity handling.
 - Context: after the backend seam exists, the application needs a real ZFS

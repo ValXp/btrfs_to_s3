@@ -71,3 +71,4 @@
 - 2026-03-13 21:10 MDT: Completed Task 30 filesystem backend interface + Btrfs snapshot/send extraction; commit "Extract Btrfs filesystem backend".
 - 2026-03-13 21:21 MDT: Completed Task 31 move restore/finalize/verify Btrfs logic behind the backend; commit "Move Btrfs restore logic behind backend".
 - 2026-03-13 21:35 MDT: Completed Task 32 orchestrator and restore flow backend selection; commit "Select filesystem backend in orchestrators".
+- 2026-03-13 21:47 MDT: Completed Task 33 ZFS application backend implementation; commit "Add ZFS application backend".
