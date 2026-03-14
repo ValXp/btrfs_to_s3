@@ -7,16 +7,16 @@ import json
 import os
 import random
 import stat
-import subprocess
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, IO
 
-from btrfs_to_s3.path_utils import ensure_sbin_on_path
+from btrfs_to_s3.filesystems.base import RestoreBackendError, RestoreOperations
+from btrfs_to_s3.filesystems.btrfs import BtrfsRestoreOperations
 
 ARCHIVAL_STORAGE_CLASSES = {"GLACIER", "DEEP_ARCHIVE", "GLACIER_IR"}
+_RESTORE_OPERATIONS = BtrfsRestoreOperations()
 
 
 class RestoreError(RuntimeError):
@@ -217,11 +217,12 @@ def restore_chain(
     wait_for_restore: bool,
     restore_tier: str,
     restore_timeout_seconds: int,
+    restore_operations: RestoreOperations = _RESTORE_OPERATIONS,
 ) -> int:
     if target.exists():
         raise RestoreError(f"target path already exists: {target}")
-    target.parent.mkdir(parents=True, exist_ok=True)
     total_bytes = 0
+    applied_any = False
     for manifest in manifests:
         if wait_for_restore:
             storage_class = manifest.s3.get("storage_class")
@@ -233,42 +234,32 @@ def restore_chain(
                 restore_tier=restore_tier,
                 timeout_seconds=restore_timeout_seconds,
             )
-        created, bytes_written = _apply_manifest_stream(
-            client, bucket, manifest, target.parent
+        bytes_written = _apply_manifest_stream(
+            client,
+            bucket,
+            manifest,
+            target,
+            restore_operations=restore_operations,
         )
+        applied_any = True
         total_bytes += bytes_written
-        if created != target:
-            if created.exists():
-                if target.exists():
-                    _delete_subvolume(target)
-                os.rename(created, target)
-            else:
-                raise RestoreError(f"received subvolume missing: {created}")
-    if target.exists():
-        _set_subvolume_writable(target)
+    if applied_any:
+        try:
+            restore_operations.finalize_restore(target)
+        except RestoreBackendError as exc:
+            raise RestoreError(str(exc)) from exc
     return total_bytes
 
 
 def verify_metadata(
     target: Path,
     *,
-    runner: callable = subprocess.run,
+    restore_operations: RestoreOperations = _RESTORE_OPERATIONS,
 ) -> None:
-    if not target.is_dir():
-        raise RestoreError(f"restore target is not a directory: {target}")
-    if not os.access(target, os.W_OK):
-        raise RestoreError(f"restore target is not writable: {target}")
-    env = os.environ.copy()
-    env["PATH"] = ensure_sbin_on_path(env.get("PATH", ""))
-    result = runner(
-        ["btrfs", "subvolume", "show", str(target)],
-        check=True,
-        text=True,
-        capture_output=True,
-        env=env,
-    )
-    if _parse_uuid(result.stdout) is None:
-        raise RestoreError("restore target has no valid UUID")
+    try:
+        restore_operations.verify_metadata(target)
+    except RestoreBackendError as exc:
+        raise RestoreError(str(exc)) from exc
 
 
 def verify_content(
@@ -334,11 +325,11 @@ def verify_restore(
     *,
     mode: str,
     sample_max_files: int,
-    runner: callable = subprocess.run,
+    restore_operations: RestoreOperations = _RESTORE_OPERATIONS,
 ) -> None:
     if mode == "none":
         return
-    verify_metadata(target, runner=runner)
+    verify_metadata(target, restore_operations=restore_operations)
     if source is None or not source.exists():
         return
     verify_content(
@@ -353,57 +344,41 @@ def _apply_manifest_stream(
     client,
     bucket: str,
     manifest: ManifestInfo,
-    receive_dir: Path,
-) -> tuple[Path, int]:
-    snapshot_path = manifest.snapshot_path
-    if not snapshot_path:
-        raise RestoreError(f"{manifest.key} missing snapshot path")
-    subvol_name = Path(snapshot_path).name
-    proc = subprocess.Popen(
-        ["btrfs", "receive", str(receive_dir)],
-        stdin=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert proc.stdin is not None
+    target: Path,
+    *,
+    restore_operations: RestoreOperations = _RESTORE_OPERATIONS,
+) -> int:
+    try:
+        receive_stream = restore_operations.open_receive(
+            target, manifest.snapshot_path
+        )
+    except RestoreBackendError as exc:
+        raise RestoreError(str(exc)) from exc
     stream_error: Exception | None = None
     try:
         bytes_written = download_and_verify_chunks(
-            client, bucket, manifest.chunks, proc.stdin
+            client, bucket, manifest.chunks, receive_stream.stdin
         )
     except Exception as exc:
         stream_error = exc
     finally:
-        proc.stdin.close()
+        try:
+            receive_stream.stdin.close()
+        except Exception:
+            pass
         if stream_error is not None:
-            stderr = _cleanup_btrfs_receive(proc)
+            stderr = restore_operations.cleanup_receive(
+                receive_stream.process
+            )
             message = f"restore stream failed: {stream_error}"
             if stderr:
-                message = f"{message}; btrfs receive error: {stderr}"
+                message = f"{message}; receive error: {stderr}"
             raise RestoreError(message) from stream_error
-    _stdout, stderr = proc.communicate()
-    code = proc.returncode
-    if code != 0:
-        error = stderr.decode("utf-8", errors="replace").strip()
-        if error:
-            raise RestoreError(
-                f"btrfs receive failed with exit code {code}: {error}"
-            )
-        raise RestoreError(f"btrfs receive failed with exit code {code}")
-    return receive_dir / subvol_name, bytes_written
-
-
-def _cleanup_btrfs_receive(
-    process: subprocess.Popen[bytes],
-    timeout: float = 5.0,
-) -> str:
     try:
-        if process.poll() is None:
-            process.terminate()
-        _stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        _stdout, stderr = process.communicate()
-    return stderr.decode("utf-8", errors="replace").strip()
+        restore_operations.complete_receive(receive_stream, target)
+    except RestoreBackendError as exc:
+        raise RestoreError(str(exc)) from exc
+    return bytes_written
 
 
 def _fetch_json(client, bucket: str, key: str) -> dict[str, Any]:
@@ -488,30 +463,6 @@ def _entry_type(path: Path) -> str:
     return "other"
 
 
-def _delete_subvolume(path: Path) -> None:
-    env = os.environ.copy()
-    env["PATH"] = ensure_sbin_on_path(env.get("PATH", ""))
-    subprocess.run(
-        ["btrfs", "subvolume", "delete", str(path)],
-        check=True,
-        text=True,
-        capture_output=True,
-        env=env,
-    )
-
-
-def _set_subvolume_writable(path: Path) -> None:
-    env = os.environ.copy()
-    env["PATH"] = ensure_sbin_on_path(env.get("PATH", ""))
-    subprocess.run(
-        ["btrfs", "property", "set", "-f", "-ts", str(path), "ro", "false"],
-        check=True,
-        text=True,
-        capture_output=True,
-        env=env,
-    )
-
-
 def _select_sample(paths: list[str], sample_max_files: int) -> list[str]:
     if sample_max_files <= 0:
         return []
@@ -530,15 +481,3 @@ def _hash_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
                 break
             hasher.update(chunk)
     return hasher.hexdigest()
-
-
-def _parse_uuid(output: str) -> str | None:
-    for line in output.splitlines():
-        if line.strip().lower().startswith("uuid:"):
-            value = line.split(":", 1)[1].strip()
-            try:
-                uuid.UUID(value)
-            except ValueError:
-                return None
-            return value
-    return None

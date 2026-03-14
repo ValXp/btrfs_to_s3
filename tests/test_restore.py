@@ -6,13 +6,13 @@ import hashlib
 import io
 import json
 import os
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from btrfs_to_s3 import restore
+from btrfs_to_s3.filesystems.base import ReceiveStream, RestoreBackendError
 
 
 class FakeBody:
@@ -397,44 +397,30 @@ class RestoreTests(unittest.TestCase):
             s3={},
             snapshot_path="/snapshots/data__20260101T000000Z__full",
         )
-
-        class FakeProcess:
-            def __init__(self) -> None:
-                self.stdin = io.BytesIO()
-                self.terminated = False
-                self.killed = False
-                self._poll = None
-                self.returncode = None
-
-            def poll(self):
-                return self._poll
-
-            def terminate(self) -> None:
-                self.terminated = True
-                self._poll = 0
-                self.returncode = 0
-
-            def kill(self) -> None:
-                self.killed = True
-                self._poll = 0
-                self.returncode = 0
-
-            def communicate(self, timeout: float | None = None):
-                return b"", b"receive failed"
-
-        proc = FakeProcess()
+        receive_stream = ReceiveStream(
+            process=mock.Mock(),
+            stdin=io.BytesIO(),
+            created_path=Path("/tmp/data__20260101T000000Z__full"),
+        )
+        operations = mock.Mock()
+        operations.open_receive.return_value = receive_stream
+        operations.cleanup_receive.return_value = "receive failed"
 
         with mock.patch(
-            "btrfs_to_s3.restore.subprocess.Popen", return_value=proc
-        ), mock.patch(
             "btrfs_to_s3.restore.download_and_verify_chunks",
             side_effect=restore.RestoreError("bad chunk"),
         ):
             with self.assertRaises(restore.RestoreError) as context:
                 restore._apply_manifest_stream(
-                    client, "bucket", manifest, Path("/tmp")
+                    client,
+                    "bucket",
+                    manifest,
+                    Path("/tmp/target"),
+                    restore_operations=operations,
                 )
-        self.assertTrue(proc.terminated)
+        operations.cleanup_receive.assert_called_once_with(
+            receive_stream.process
+        )
         self.assertIn("restore stream failed", str(context.exception))
         self.assertIn("receive failed", str(context.exception))
 
@@ -448,26 +434,27 @@ class RestoreTests(unittest.TestCase):
             s3={},
             snapshot_path="/snapshots/data__20260101T000000Z__full",
         )
-
-        class FakeProcess:
-            def __init__(self) -> None:
-                self.stdin = io.BytesIO()
-                self.returncode = 2
-
-            def communicate(self, timeout: float | None = None):
-                return b"", b"receive stderr"
-
-        proc = FakeProcess()
+        operations = mock.Mock()
+        operations.open_receive.return_value = ReceiveStream(
+            process=mock.Mock(),
+            stdin=io.BytesIO(),
+            created_path=Path("/tmp/data__20260101T000000Z__full"),
+        )
+        operations.complete_receive.side_effect = RestoreBackendError(
+            "btrfs receive failed with exit code 2: receive stderr"
+        )
 
         with mock.patch(
-            "btrfs_to_s3.restore.subprocess.Popen", return_value=proc
-        ), mock.patch(
             "btrfs_to_s3.restore.download_and_verify_chunks",
             return_value=0,
         ):
             with self.assertRaises(restore.RestoreError) as context:
                 restore._apply_manifest_stream(
-                    client, "bucket", manifest, Path("/tmp")
+                    client,
+                    "bucket",
+                    manifest,
+                    Path("/tmp/target"),
+                    restore_operations=operations,
                 )
         self.assertIn("exit code 2", str(context.exception))
         self.assertIn("receive stderr", str(context.exception))
@@ -482,30 +469,31 @@ class RestoreTests(unittest.TestCase):
             s3={},
             snapshot_path="/snapshots/data__20260101T000000Z__full",
         )
-
-        class FakeProcess:
-            def __init__(self) -> None:
-                self.stdin = io.BytesIO()
-                self.returncode = 1
-
-            def communicate(self, timeout: float | None = None):
-                return b"", b""
-
-        proc = FakeProcess()
+        operations = mock.Mock()
+        operations.open_receive.return_value = ReceiveStream(
+            process=mock.Mock(),
+            stdin=io.BytesIO(),
+            created_path=Path("/tmp/data__20260101T000000Z__full"),
+        )
+        operations.complete_receive.side_effect = RestoreBackendError(
+            "btrfs receive failed with exit code 1"
+        )
 
         with mock.patch(
-            "btrfs_to_s3.restore.subprocess.Popen", return_value=proc
-        ), mock.patch(
             "btrfs_to_s3.restore.download_and_verify_chunks",
             return_value=0,
         ):
             with self.assertRaises(restore.RestoreError) as context:
                 restore._apply_manifest_stream(
-                    client, "bucket", manifest, Path("/tmp")
+                    client,
+                    "bucket",
+                    manifest,
+                    Path("/tmp/target"),
+                    restore_operations=operations,
                 )
         self.assertIn("exit code 1", str(context.exception))
 
-    def test_restore_chain_renames_and_sets_writable(self) -> None:
+    def test_restore_chain_finalizes_via_backend(self) -> None:
         client = FakeS3()
         manifest = restore.ManifestInfo(
             key="manifest.json",
@@ -516,17 +504,13 @@ class RestoreTests(unittest.TestCase):
             snapshot_path="/snapshots/data__20260101T000000Z__full",
         )
         with tempfile.TemporaryDirectory() as tmpdir:
-            parent = Path(tmpdir)
-            created = parent / "created"
-            created.mkdir()
-            target = parent / "target"
+            target = Path(tmpdir) / "target"
+            operations = mock.Mock()
 
             with mock.patch(
                 "btrfs_to_s3.restore._apply_manifest_stream",
-                return_value=(created, 123),
-            ), mock.patch(
-                "btrfs_to_s3.restore._set_subvolume_writable"
-            ) as writable:
+                return_value=123,
+            ):
                 total = restore.restore_chain(
                     client,
                     "bucket",
@@ -535,13 +519,13 @@ class RestoreTests(unittest.TestCase):
                     wait_for_restore=False,
                     restore_tier="Standard",
                     restore_timeout_seconds=1,
+                    restore_operations=operations,
                 )
 
             self.assertEqual(total, 123)
-            self.assertTrue(target.exists())
-            writable.assert_called_once_with(target)
+            operations.finalize_restore.assert_called_once_with(target)
 
-    def test_restore_chain_waits_and_deletes_target(self) -> None:
+    def test_restore_chain_waits_before_each_manifest(self) -> None:
         client = FakeS3()
         manifest = restore.ManifestInfo(
             key="manifest.json",
@@ -560,23 +544,15 @@ class RestoreTests(unittest.TestCase):
             snapshot_path="/snapshots/data__20260102T000000Z__inc",
         )
         with tempfile.TemporaryDirectory() as tmpdir:
-            parent = Path(tmpdir)
-            target = parent / "target"
-            created_first = parent / "created_first"
-            created_first.mkdir()
-            created_second = parent / "created"
-            created_second.mkdir()
+            target = Path(tmpdir) / "target"
+            operations = mock.Mock()
 
             with mock.patch(
                 "btrfs_to_s3.restore._apply_manifest_stream",
-                side_effect=[(created_first, 1), (created_second, 2)],
+                side_effect=[1, 2],
             ), mock.patch(
-                "btrfs_to_s3.restore._delete_subvolume"
-            ) as delete, mock.patch(
                 "btrfs_to_s3.restore.ensure_chunks_restored"
-            ) as ensure, mock.patch(
-                "btrfs_to_s3.restore._set_subvolume_writable"
-            ):
+            ) as ensure:
                 total = restore.restore_chain(
                     client,
                     "bucket",
@@ -585,11 +561,12 @@ class RestoreTests(unittest.TestCase):
                     wait_for_restore=True,
                     restore_tier="Standard",
                     restore_timeout_seconds=1,
+                    restore_operations=operations,
                 )
 
             self.assertEqual(total, 3)
-            delete.assert_called_once_with(target)
             self.assertEqual(ensure.call_count, 2)
+            operations.finalize_restore.assert_called_once_with(target)
 
     def test_restore_chain_rejects_existing_target(self) -> None:
         client = FakeS3()
@@ -627,23 +604,25 @@ class RestoreTests(unittest.TestCase):
             snapshot_path="/snapshots/data__20260101T000000Z__full",
         )
         with tempfile.TemporaryDirectory() as tmpdir:
-            parent = Path(tmpdir)
-            target = parent / "target"
+            target = Path(tmpdir) / "target"
+            operations = mock.Mock()
+            operations.open_receive.return_value = ReceiveStream(
+                process=mock.Mock(),
+                stdin=io.BytesIO(),
+                created_path=Path(tmpdir) / "missing",
+            )
+            operations.complete_receive.side_effect = RestoreBackendError(
+                f"received subvolume missing: {Path(tmpdir) / 'missing'}"
+            )
 
-            with mock.patch(
-                "btrfs_to_s3.restore._apply_manifest_stream",
-                return_value=(parent / "missing", 1),
-            ):
-                with self.assertRaises(restore.RestoreError) as context:
-                    restore.restore_chain(
-                        client,
-                        "bucket",
-                        [manifest],
-                        target,
-                        wait_for_restore=False,
-                        restore_tier="Standard",
-                        restore_timeout_seconds=1,
-                    )
+            with self.assertRaises(restore.RestoreError) as context:
+                restore._apply_manifest_stream(
+                    client,
+                    "bucket",
+                    manifest,
+                    target,
+                    restore_operations=operations,
+                )
         self.assertIn("received subvolume missing", str(context.exception))
 
     def test_apply_manifest_stream_requires_snapshot_path(self) -> None:
@@ -662,36 +641,6 @@ class RestoreTests(unittest.TestCase):
                 client, "bucket", manifest, Path("/tmp")
             )
         self.assertIn("missing snapshot path", str(context.exception))
-
-    def test_cleanup_btrfs_receive_handles_timeout(self) -> None:
-        class FakeProcess:
-            def __init__(self) -> None:
-                self.terminated = False
-                self.killed = False
-                self._calls = 0
-
-            def poll(self):
-                return None
-
-            def terminate(self) -> None:
-                self.terminated = True
-
-            def kill(self) -> None:
-                self.killed = True
-
-            def communicate(self, timeout: float | None = None):
-                self._calls += 1
-                if self._calls == 1:
-                    raise subprocess.TimeoutExpired(cmd="btrfs", timeout=1.0)
-                return b"", b"stderr"
-
-        proc = FakeProcess()
-
-        stderr = restore._cleanup_btrfs_receive(proc, timeout=0.0)
-
-        self.assertTrue(proc.terminated)
-        self.assertTrue(proc.killed)
-        self.assertEqual(stderr, "stderr")
 
     def test_parse_snapshot_path_none_returns_none(self) -> None:
         path = restore._parse_snapshot_path(
@@ -746,100 +695,28 @@ class RestoreTests(unittest.TestCase):
         message = restore._check_missing_extra(["a"], ["a", "b"], "file")
         self.assertEqual(message, "extra file: b")
 
-    def test_delete_subvolume_runs_btrfs(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            target = Path(tmpdir)
-            with mock.patch(
-                "btrfs_to_s3.restore.subprocess.run"
-            ) as runner:
-                restore._delete_subvolume(target)
-        runner.assert_called_once()
-
-    def test_set_subvolume_writable_runs_btrfs(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            target = Path(tmpdir)
-            with mock.patch(
-                "btrfs_to_s3.restore.subprocess.run"
-            ) as runner:
-                restore._set_subvolume_writable(target)
-        runner.assert_called_once()
-
 
 class RestoreVerifyTests(unittest.TestCase):
-    def test_verify_metadata_uses_sbin_on_path(self) -> None:
-        with tempfile.TemporaryDirectory() as target_dir:
-            target_path = Path(target_dir)
-            captured: dict[str, str] = {}
+    def test_verify_metadata_delegates_to_backend(self) -> None:
+        operations = mock.Mock()
+        target = Path("/tmp/target")
 
-            def runner(*args, **kwargs):
-                captured["path"] = kwargs["env"]["PATH"]
-                return subprocess.CompletedProcess(
-                    args[0],
-                    0,
-                    stdout="UUID: 11111111-2222-3333-4444-555555555555\n",
-                    stderr="",
-                )
+        restore.verify_metadata(target, restore_operations=operations)
 
-            with mock.patch.dict(os.environ, {"PATH": "/bin"}):
-                restore.verify_metadata(target_path, runner=runner)
-        self.assertIn("/usr/sbin", captured["path"])
-        self.assertIn("/sbin", captured["path"])
+        operations.verify_metadata.assert_called_once_with(target)
 
-    def test_verify_metadata_requires_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as target_dir:
-            target_path = Path(target_dir) / "file.txt"
-            target_path.write_text("data", encoding="utf-8")
+    def test_verify_metadata_wraps_backend_error(self) -> None:
+        operations = mock.Mock()
+        operations.verify_metadata.side_effect = RestoreBackendError(
+            "restore target has no valid UUID"
+        )
 
-            with self.assertRaises(restore.RestoreError) as context:
-                restore.verify_metadata(target_path, runner=mock.Mock())
-            self.assertIn("not a directory", str(context.exception))
-
-    def test_verify_metadata_requires_writable(self) -> None:
-        with tempfile.TemporaryDirectory() as target_dir:
-            target_path = Path(target_dir)
-
-            def runner(*args, **kwargs):
-                return subprocess.CompletedProcess(
-                    args[0],
-                    0,
-                    stdout="UUID: 11111111-2222-3333-4444-555555555555\n",
-                    stderr="",
-                )
-
-            with mock.patch("os.access", return_value=False):
-                with self.assertRaises(restore.RestoreError) as context:
-                    restore.verify_metadata(target_path, runner=runner)
-            self.assertIn("not writable", str(context.exception))
-
-    def test_verify_metadata_requires_uuid(self) -> None:
-        with tempfile.TemporaryDirectory() as target_dir:
-            target_path = Path(target_dir)
-
-            def runner(*args, **kwargs):
-                return subprocess.CompletedProcess(
-                    args[0],
-                    0,
-                    stdout="UUID: 11111111-2222-3333-4444-555555555555\n",
-                    stderr="",
-                )
-
-            restore.verify_metadata(target_path, runner=runner)
-
-    def test_verify_metadata_invalid_uuid(self) -> None:
-        with tempfile.TemporaryDirectory() as target_dir:
-            target_path = Path(target_dir)
-
-            def runner(*args, **kwargs):
-                return subprocess.CompletedProcess(
-                    args[0],
-                    0,
-                    stdout="UUID: not-a-uuid\n",
-                    stderr="",
-                )
-
-            with self.assertRaises(restore.RestoreError) as context:
-                restore.verify_metadata(target_path, runner=runner)
-            self.assertIn("UUID", str(context.exception))
+        with self.assertRaises(restore.RestoreError) as context:
+            restore.verify_metadata(
+                Path("/tmp/target"),
+                restore_operations=operations,
+            )
+        self.assertIn("valid UUID", str(context.exception))
 
     def test_verify_content_missing_file(self) -> None:
         with tempfile.TemporaryDirectory() as source_dir:
@@ -988,36 +865,27 @@ class RestoreVerifyTests(unittest.TestCase):
     def test_verify_restore_missing_source_skips_content(self) -> None:
         with tempfile.TemporaryDirectory() as target_dir:
             target_path = Path(target_dir)
-
-            def runner(*args, **kwargs):
-                return subprocess.CompletedProcess(
-                    args[0],
-                    0,
-                    stdout="UUID: 11111111-2222-3333-4444-555555555555\n",
-                    stderr="",
-                )
+            operations = mock.Mock()
 
             restore.verify_restore(
                 Path("/missing/source"),
                 target_path,
                 mode="full",
                 sample_max_files=10,
-                runner=runner,
+                restore_operations=operations,
             )
+        operations.verify_metadata.assert_called_once_with(target_path)
 
     def test_verify_restore_mode_none_skips_metadata(self) -> None:
-        runner = mock.Mock()
+        operations = mock.Mock()
         restore.verify_restore(
             None,
             Path("/tmp/target"),
             mode="none",
             sample_max_files=10,
-            runner=runner,
+            restore_operations=operations,
         )
-        runner.assert_not_called()
-
-    def test_parse_uuid_missing_returns_none(self) -> None:
-        self.assertIsNone(restore._parse_uuid("no uuid here"))
+        operations.verify_metadata.assert_not_called()
 
 
 

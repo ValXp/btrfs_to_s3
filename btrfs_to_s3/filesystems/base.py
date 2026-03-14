@@ -18,6 +18,10 @@ class StreamError(RuntimeError):
     """Raised when streaming fails."""
 
 
+class RestoreBackendError(RuntimeError):
+    """Raised when backend-specific restore operations fail."""
+
+
 @dataclass(frozen=True)
 class Snapshot:
     name: str
@@ -30,6 +34,13 @@ class Snapshot:
 class SendStream:
     process: subprocess.Popen[bytes]
     stdout: BinaryIO
+
+
+@dataclass(frozen=True)
+class ReceiveStream:
+    process: subprocess.Popen[bytes]
+    stdin: BinaryIO
+    created_path: Path
 
 
 class CommandRunner(Protocol):
@@ -74,6 +85,37 @@ class SendOperations(Protocol):
         timeout: float = 5.0,
     ) -> str:
         """Stop a send stream process and return stderr output."""
+
+
+class RestoreOperations(Protocol):
+    """Restore operations exposed by a filesystem backend."""
+
+    def open_receive(
+        self,
+        target: Path,
+        snapshot_path: str | None,
+    ) -> ReceiveStream:
+        """Open a receive stream for a manifest."""
+
+    def cleanup_receive(
+        self,
+        process: subprocess.Popen[bytes],
+        timeout: float = 5.0,
+    ) -> str:
+        """Stop a failed receive stream and return stderr output."""
+
+    def complete_receive(
+        self,
+        stream: ReceiveStream,
+        target: Path,
+    ) -> None:
+        """Wait for receive completion and place the result at target."""
+
+    def finalize_restore(self, target: Path) -> None:
+        """Finalize the restored filesystem object."""
+
+    def verify_metadata(self, target: Path) -> None:
+        """Verify backend-specific metadata on the restored target."""
 
 
 def snapshot_name(subvolume_name: str, created_at: datetime, kind: str) -> str:

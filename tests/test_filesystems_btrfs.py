@@ -10,8 +10,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from btrfs_to_s3.filesystems.base import SendStream, StreamError
+from btrfs_to_s3.filesystems.base import (
+    ReceiveStream,
+    RestoreBackendError,
+    SendStream,
+    StreamError,
+)
 from btrfs_to_s3.filesystems.btrfs import (
+    BtrfsRestoreOperations,
     BtrfsSendOperations,
     BtrfsSnapshotManager,
 )
@@ -181,6 +187,288 @@ class BtrfsSendOperationsTests(unittest.TestCase):
                 self.operations.open_send(Path("/snapshots/child"))
 
         process.kill.assert_called_once_with()
+
+
+class BtrfsRestoreOperationsTests(unittest.TestCase):
+    def test_open_receive_builds_args_and_created_path(self) -> None:
+        process = mock.Mock()
+        process.stdin = io.BytesIO()
+        popen = mock.Mock(return_value=process)
+        operations = BtrfsRestoreOperations(popen=popen)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "restore" / "data"
+            result = operations.open_receive(
+                target,
+                "/snapshots/data__20260101T000000Z__full",
+            )
+
+        popen.assert_called_once_with(
+            ["btrfs", "receive", str(target.parent)],
+            stdin=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(
+            result,
+            ReceiveStream(
+                process=process,
+                stdin=process.stdin,
+                created_path=target.parent / "data__20260101T000000Z__full",
+            ),
+        )
+
+    def test_open_receive_requires_snapshot_path(self) -> None:
+        operations = BtrfsRestoreOperations(popen=mock.Mock())
+
+        with self.assertRaises(RestoreBackendError) as context:
+            operations.open_receive(Path("/tmp/restore/data"), None)
+        self.assertIn("missing snapshot path", str(context.exception))
+
+    def test_open_receive_raises_without_stdin(self) -> None:
+        process = mock.Mock()
+        process.stdin = None
+        popen = mock.Mock(return_value=process)
+        operations = BtrfsRestoreOperations(popen=popen)
+
+        with self.assertRaises(RestoreBackendError):
+            operations.open_receive(
+                Path("/tmp/restore/data"),
+                "/snapshots/data__20260101T000000Z__full",
+            )
+
+        process.kill.assert_called_once_with()
+
+    def test_cleanup_receive_terminates_and_returns_stderr(self) -> None:
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.terminated = False
+                self.killed = False
+                self._poll = None
+
+            def poll(self):
+                return self._poll
+
+            def terminate(self) -> None:
+                self.terminated = True
+                self._poll = 0
+
+            def kill(self) -> None:
+                self.killed = True
+                self._poll = 0
+
+            def communicate(self, timeout: float | None = None):
+                return b"", b"stderr output"
+
+        operations = BtrfsRestoreOperations()
+        process = FakeProcess()
+
+        error = operations.cleanup_receive(process)
+
+        self.assertTrue(process.terminated)
+        self.assertFalse(process.killed)
+        self.assertEqual(error, "stderr output")
+
+    def test_cleanup_receive_kills_on_timeout(self) -> None:
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.terminated = False
+                self.killed = False
+                self._poll = None
+                self._calls = 0
+
+            def poll(self):
+                return self._poll
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def kill(self) -> None:
+                self.killed = True
+                self._poll = 0
+
+            def communicate(self, timeout: float | None = None):
+                self._calls += 1
+                if self._calls == 1:
+                    raise subprocess.TimeoutExpired("btrfs receive", 1.0)
+                return b"", b"forced stderr"
+
+        operations = BtrfsRestoreOperations()
+        process = FakeProcess()
+
+        error = operations.cleanup_receive(process, timeout=0.01)
+
+        self.assertTrue(process.terminated)
+        self.assertTrue(process.killed)
+        self.assertEqual(error, "forced stderr")
+
+    def test_complete_receive_replaces_existing_target(self) -> None:
+        calls: list[list[str]] = []
+
+        def runner(*args, **kwargs):
+            command = args[0]
+            calls.append(command)
+            if command[:3] == ["btrfs", "subvolume", "delete"]:
+                Path(command[3]).rmdir()
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        operations = BtrfsRestoreOperations(runner=runner)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            target = base / "target"
+            target.mkdir()
+            created = base / "data__20260101T000000Z__full"
+            created.mkdir()
+            process = mock.Mock()
+            process.returncode = 0
+            process.communicate.return_value = (b"", b"")
+
+            operations.complete_receive(
+                ReceiveStream(
+                    process=process,
+                    stdin=io.BytesIO(),
+                    created_path=created,
+                ),
+                target,
+            )
+
+            self.assertEqual(
+                calls,
+                [["btrfs", "subvolume", "delete", str(target)]],
+            )
+            self.assertTrue(target.exists())
+            self.assertFalse(created.exists())
+
+    def test_complete_receive_reports_stderr(self) -> None:
+        operations = BtrfsRestoreOperations(runner=mock.Mock())
+        process = mock.Mock()
+        process.returncode = 2
+        process.communicate.return_value = (b"", b"receive stderr")
+
+        with self.assertRaises(RestoreBackendError) as context:
+            operations.complete_receive(
+                ReceiveStream(
+                    process=process,
+                    stdin=io.BytesIO(),
+                    created_path=Path("/tmp/created"),
+                ),
+                Path("/tmp/target"),
+            )
+        self.assertIn("exit code 2", str(context.exception))
+        self.assertIn("receive stderr", str(context.exception))
+
+    def test_complete_receive_requires_created_path(self) -> None:
+        operations = BtrfsRestoreOperations(runner=mock.Mock())
+        process = mock.Mock()
+        process.returncode = 0
+        process.communicate.return_value = (b"", b"")
+
+        with self.assertRaises(RestoreBackendError) as context:
+            operations.complete_receive(
+                ReceiveStream(
+                    process=process,
+                    stdin=io.BytesIO(),
+                    created_path=Path("/tmp/missing"),
+                ),
+                Path("/tmp/target"),
+            )
+        self.assertIn("received subvolume missing", str(context.exception))
+
+    def test_finalize_restore_runs_property_set(self) -> None:
+        captured: dict[str, object] = {}
+
+        def runner(*args, **kwargs):
+            captured["args"] = args[0]
+            captured["path"] = kwargs["env"]["PATH"]
+            return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
+
+        operations = BtrfsRestoreOperations(runner=runner)
+
+        operations.finalize_restore(Path("/tmp/target"))
+
+        self.assertEqual(
+            captured["args"],
+            ["btrfs", "property", "set", "-f", "-ts", "/tmp/target", "ro", "false"],
+        )
+        assert isinstance(captured["path"], str)
+        self.assertIn("/usr/sbin", captured["path"])
+        self.assertIn("/sbin", captured["path"])
+
+    def test_verify_metadata_uses_sbin_on_path(self) -> None:
+        captured: dict[str, object] = {}
+
+        def runner(*args, **kwargs):
+            captured["args"] = args[0]
+            captured["path"] = kwargs["env"]["PATH"]
+            return subprocess.CompletedProcess(
+                args[0],
+                0,
+                stdout="UUID: 11111111-2222-3333-4444-555555555555\n",
+                stderr="",
+            )
+
+        operations = BtrfsRestoreOperations(runner=runner)
+
+        with tempfile.TemporaryDirectory() as target_dir:
+            with mock.patch.dict("os.environ", {"PATH": "/bin"}):
+                operations.verify_metadata(Path(target_dir))
+
+        self.assertEqual(
+            captured["args"],
+            ["btrfs", "subvolume", "show", target_dir],
+        )
+        assert isinstance(captured["path"], str)
+        self.assertIn("/usr/sbin", captured["path"])
+        self.assertIn("/sbin", captured["path"])
+
+    def test_verify_metadata_requires_directory(self) -> None:
+        operations = BtrfsRestoreOperations(runner=mock.Mock())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "file.txt"
+            target.write_text("data", encoding="utf-8")
+            with self.assertRaises(RestoreBackendError) as context:
+                operations.verify_metadata(target)
+        self.assertIn("not a directory", str(context.exception))
+
+    def test_verify_metadata_requires_writable(self) -> None:
+        operations = BtrfsRestoreOperations(runner=mock.Mock())
+
+        with tempfile.TemporaryDirectory() as target_dir:
+            with mock.patch("os.access", return_value=False):
+                with self.assertRaises(RestoreBackendError) as context:
+                    operations.verify_metadata(Path(target_dir))
+        self.assertIn("not writable", str(context.exception))
+
+    def test_verify_metadata_invalid_uuid(self) -> None:
+        def runner(*args, **kwargs):
+            return subprocess.CompletedProcess(
+                args[0],
+                0,
+                stdout="UUID: not-a-uuid\n",
+                stderr="",
+            )
+
+        operations = BtrfsRestoreOperations(runner=runner)
+
+        with tempfile.TemporaryDirectory() as target_dir:
+            with self.assertRaises(RestoreBackendError) as context:
+                operations.verify_metadata(Path(target_dir))
+        self.assertIn("valid UUID", str(context.exception))
+
+    def test_finalize_restore_surfaces_stderr(self) -> None:
+        def runner(*args, **kwargs):
+            raise subprocess.CalledProcessError(
+                1,
+                args[0],
+                stderr="property set failed",
+            )
+
+        operations = BtrfsRestoreOperations(runner=runner)
+
+        with self.assertRaises(RestoreBackendError) as context:
+            operations.finalize_restore(Path("/tmp/target"))
+        self.assertIn("property set failed", str(context.exception))
 
 
 if __name__ == "__main__":

@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, Callable
 
 from btrfs_to_s3.filesystems.base import (
     CommandRunner,
+    ReceiveStream,
+    RestoreBackendError,
+    RestoreOperations,
     SendOperations,
     SendStream,
     Snapshot,
@@ -17,6 +22,7 @@ from btrfs_to_s3.filesystems.base import (
     parse_snapshot_name,
     snapshot_name,
 )
+from btrfs_to_s3.path_utils import ensure_sbin_on_path
 
 
 class BtrfsSnapshotManager(SnapshotOperations):
@@ -127,3 +133,134 @@ class BtrfsSendOperations(SendOperations):
             process.kill()
             raise StreamError("failed to capture btrfs send output")
         return SendStream(process=process, stdout=process.stdout)
+
+
+class BtrfsRestoreOperations(RestoreOperations):
+    def __init__(
+        self,
+        *,
+        popen: Callable[..., subprocess.Popen[bytes]] | None = None,
+        runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    ) -> None:
+        self._popen = popen or subprocess.Popen
+        self._runner = runner or subprocess.run
+
+    def open_receive(
+        self,
+        target: Path,
+        snapshot_path: str | None,
+    ) -> ReceiveStream:
+        if not snapshot_path:
+            raise RestoreBackendError("missing snapshot path")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        process = self._popen(
+            ["btrfs", "receive", str(target.parent)],
+            stdin=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if process.stdin is None:
+            process.kill()
+            raise RestoreBackendError("failed to capture btrfs receive input")
+        return ReceiveStream(
+            process=process,
+            stdin=process.stdin,
+            created_path=target.parent / Path(snapshot_path).name,
+        )
+
+    def cleanup_receive(
+        self,
+        process: subprocess.Popen[bytes],
+        timeout: float = 5.0,
+    ) -> str:
+        try:
+            if process.poll() is None:
+                process.terminate()
+            _stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            _stdout, stderr = process.communicate()
+        return _decode_stderr(stderr)
+
+    def complete_receive(
+        self,
+        stream: ReceiveStream,
+        target: Path,
+    ) -> None:
+        _stdout, stderr = stream.process.communicate()
+        code = stream.process.returncode
+        if code != 0:
+            error = _decode_stderr(stderr)
+            if error:
+                raise RestoreBackendError(
+                    f"btrfs receive failed with exit code {code}: {error}"
+                )
+            raise RestoreBackendError(
+                f"btrfs receive failed with exit code {code}"
+            )
+        created_path = stream.created_path
+        if created_path == target:
+            return
+        if not created_path.exists():
+            raise RestoreBackendError(
+                f"received subvolume missing: {created_path}"
+            )
+        if target.exists():
+            self._delete_subvolume(target)
+        os.rename(created_path, target)
+
+    def finalize_restore(self, target: Path) -> None:
+        self._run(
+            ["btrfs", "property", "set", "-f", "-ts", str(target), "ro", "false"]
+        )
+
+    def verify_metadata(self, target: Path) -> None:
+        if not target.is_dir():
+            raise RestoreBackendError(
+                f"restore target is not a directory: {target}"
+            )
+        if not os.access(target, os.W_OK):
+            raise RestoreBackendError(
+                f"restore target is not writable: {target}"
+            )
+        result = self._run(["btrfs", "subvolume", "show", str(target)])
+        if _parse_uuid(result.stdout) is None:
+            raise RestoreBackendError("restore target has no valid UUID")
+
+    def _delete_subvolume(self, path: Path) -> None:
+        self._run(["btrfs", "subvolume", "delete", str(path)])
+
+    def _run(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["PATH"] = ensure_sbin_on_path(env.get("PATH", ""))
+        try:
+            return self._runner(
+                args,
+                check=True,
+                text=True,
+                capture_output=True,
+                env=env,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            message = (
+                f"{args[0]} command failed with exit code {exc.returncode}"
+            )
+            if stderr:
+                message = f"{message}: {stderr}"
+            raise RestoreBackendError(message) from exc
+
+
+def _decode_stderr(stderr: bytes) -> str:
+    return stderr.decode("utf-8", errors="replace").strip()
+
+
+def _parse_uuid(output: str) -> str | None:
+    for line in output.splitlines():
+        if line.strip().lower().startswith("uuid:"):
+            value = line.split(":", 1)[1].strip()
+            try:
+                uuid.UUID(value)
+            except ValueError:
+                return None
+            return value
+    return None

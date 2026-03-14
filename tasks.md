@@ -189,6 +189,7 @@
     wrapper behavior.
 
 ### Task 31: Move restore/finalize/verify Btrfs logic behind the backend
+- Status: completed 2026-03-13 21:21 MDT by commit "Move Btrfs restore logic behind backend".
 - Scope: `btrfs_to_s3/restore.py`, new or updated modules under
   `btrfs_to_s3/filesystems/`, and `tests/test_restore.py`.
 - Context: `restore.py` currently mixes generic manifest/S3 replay logic with
