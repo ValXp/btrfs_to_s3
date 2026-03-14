@@ -1,17 +1,22 @@
 # btrfs_to_s3 test harness
 
 This directory contains a Python-first test harness for running end-to-end backups
-against a loopback Btrfs filesystem and AWS S3. All runtime artifacts are
-created under `integration_tests/run/` (generated).
+against disposable filesystem fixtures and AWS S3. The runnable path today is the
+loopback Btrfs harness; the ZFS config and docs in this file are groundwork for
+the upcoming ZFS fixture scripts. All runtime artifacts are created under
+`integration_tests/run/` (generated).
 
 Prerequisites
 - Python 3.14
 - btrfs-progs (mkfs.btrfs, btrfs)
 - util-linux (losetup, mount, umount)
+- For ZFS configs: OpenZFS userland and kernel support (`zpool`, `zfs`)
 - AWS credentials with access to the test bucket/prefix
   - Note: `losetup` and `mkfs.btrfs` often live in `/usr/sbin`. If your PATH
     doesn't include `/usr/sbin`, run via `sudo -E` so the harness helpers
     can find them.
+  - For ZFS-backed runs, you also need privileges to create and destroy a
+    disposable file-backed pool under `integration_tests/run/`.
 
 AWS test bucket/prefix guidance
 - Use a dedicated bucket or a dedicated prefix within a shared bucket.
@@ -23,12 +28,36 @@ AWS test bucket/prefix guidance
 
 Configuration
 - `integration_tests/config/test.toml` controls harness settings and S3 parameters.
+- `integration_tests/config/test_zfs.toml` is the backend-aware template for a
+  disposable file-backed ZFS pool rooted under `integration_tests/run/zfs/`.
 - `integration_tests/config/test_large.toml` forces multi-chunk uploads with a smaller
   chunk size and larger dataset defaults.
 - `integration_tests/config/test_archive.toml` uses an archival storage class and overrides
   restore wait/timeout settings.
 - `integration_tests/config/test.env` holds AWS credentials and optional overrides.
 - Set all `CHANGE_ME` values before running tests.
+
+Config structure
+- Shared sections for all backends: `[tool]`, `[paths]`, `[aws]`, `[backup]`.
+- Backend selection: `[filesystem] backend = "btrfs"` or `"zfs"`.
+- Backward compatibility: if `[filesystem]` is omitted, the loader treats the
+  config as the legacy Btrfs shape used by `integration_tests/config/test.toml`.
+- Btrfs-specific config:
+  - `paths.btrfs_image`, `paths.mount_dir`, `paths.data_dir`, `paths.snapshots_dir`
+  - `[btrfs]` with `loopback_size_gib`, `mount_options`, and `subvolumes`
+- ZFS-specific config:
+  - `[zfs]` with `pool_name`, `pool_file`, `pool_size_gib`, `mount_root`,
+    `source_datasets`, `receive_parent_dataset`, and `snapshot_prefix`
+  - optional `zpool_create_args` and `zfs_create_args` for pool or dataset defaults
+
+How the ZFS harness differs
+- The Btrfs harness creates a loopback image, mounts one filesystem, and works
+  with subvolume paths under that mount.
+- The ZFS harness is designed around a disposable file-backed pool plus dataset
+  names, not Btrfs path keys. Source definitions live in `[zfs]`, and mounts are
+  derived from `mount_root` instead of `paths.mount_dir`.
+- At this stage only the config schema and template are in place for ZFS; the
+  actual ZFS setup/teardown and probe scripts are added in later tasks.
 
 BTRFS_TO_S3_CMD override
 - Optional: set `BTRFS_TO_S3_CMD` in `integration_tests/config/test.env` as a JSON array.

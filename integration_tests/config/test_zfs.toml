@@ -1,0 +1,35 @@
+[tool]
+cmd = ["python3", "-m", "btrfs_to_s3"]
+config_flag = "--config"
+
+[filesystem]
+backend = "zfs"
+
+[paths]
+run_dir = "integration_tests/run/zfs"
+logs_dir = "integration_tests/run/zfs/logs"
+scratch_dir = "integration_tests/run/zfs/scratch"
+lock_dir = "integration_tests/run/zfs/lock"
+
+[zfs]
+pool_name = "btrfs_to_s3_test"
+pool_file = "integration_tests/run/zfs/pool.img"
+pool_size_gib = 4
+mount_root = "integration_tests/run/zfs/mnt"
+source_datasets = ["data", "home"]
+receive_parent_dataset = "restore"
+snapshot_prefix = "btrfs-to-s3"
+zpool_create_args = ["-O", "compression=zstd", "-O", "atime=off"]
+zfs_create_args = ["-o", "compression=zstd"]
+
+[aws]
+region = "us-east-1"
+bucket = "codex-btrfs-test-bucket"
+prefix = "btrfs-to-s3-test/zfs/"
+storage_class = "STANDARD"
+sse = "AES256"
+
+[backup]
+chunk_size_mib = 64
+concurrency = 4
+retention_snapshots = 2

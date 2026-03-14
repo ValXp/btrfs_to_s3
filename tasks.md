@@ -14,6 +14,7 @@
   error handling.
 
 ### Task 24: Harness config schema + ZFS docs groundwork
+- Status: completed 2026-03-13 20:21 MDT by commit "Add ZFS harness config groundwork".
 - Scope: `integration_tests/harness/config.py`, `integration_tests/README.md`,
   `integration_tests/config/test_zfs.toml`, tests for harness config loading.
 - Context: the integration harness currently hard-requires a `[btrfs]` section
