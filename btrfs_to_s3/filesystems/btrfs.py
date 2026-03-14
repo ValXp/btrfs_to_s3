@@ -238,6 +238,9 @@ class BtrfsRestoreOperations(RestoreOperations):
             return None
         return Path(snapshot_path).expanduser()
 
+    def cleanup_verify_source(self, source: Path | None) -> None:
+        del source
+
     def _delete_subvolume(self, path: Path) -> None:
         self._run(["btrfs", "subvolume", "delete", str(path)])
 

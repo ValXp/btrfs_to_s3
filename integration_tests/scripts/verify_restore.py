@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime
 
@@ -23,6 +24,7 @@ from harness.filesystem import (
     restore_target_dataset,
     source_identifiers,
     target_token,
+    zfs_dataset_mount_path,
     zfs_snapshot_mount_path,
 )
 from harness.logs import open_log
@@ -33,8 +35,21 @@ DEFAULT_CONFIG = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, "config", "test.toml")
 )
 DEFAULT_SAMPLE_SIZE = 25
+VERIFY_CLONE_DESTROY_ATTEMPTS = 5
+VERIFY_CLONE_DESTROY_DELAY_SECONDS = 0.2
 RESTORE_METADATA_FILE = "restore_target.json"
 RESTORE_TARGETS_FILE = "restore_targets.json"
+
+
+class _ResolvedSourceSnapshot:
+    def __init__(
+        self,
+        path: str,
+        *,
+        cleanup_dataset: str | None = None,
+    ) -> None:
+        self.path = path
+        self.cleanup_dataset = cleanup_dataset
 
 
 def main() -> int:
@@ -76,7 +91,7 @@ def main() -> int:
             return 1
 
         for source in sources:
-            source_path: str | None = None
+            source_snapshot: _ResolvedSourceSnapshot | None = None
             try:
                 target_path = _resolve_target_path(
                     args,
@@ -84,53 +99,50 @@ def main() -> int:
                     source,
                     require_mapping=len(sources) > 1,
                 )
-                source_path = _resolve_source_snapshot(
+                source_snapshot = _resolve_source_snapshot(
                     args.source_snapshot,
                     config,
                     source,
                 )
             except ValueError as exc:
-                if not _should_verify_metadata_only(
-                    args.source_snapshot,
-                    config,
-                    exc,
-                ):
-                    log.write(str(exc), level="ERROR")
-                    return 1
-                log.write(str(exc), level="WARN")
-                log.write(
-                    f"source snapshot unavailable for {source}; "
-                    "verifying restore metadata only",
-                    level="WARN",
-                )
+                log.write(str(exc), level="ERROR")
+                return 1
 
             log.write(f"target restore: {target_path}")
-            if source_path is not None:
-                log.write(f"source snapshot: {source_path}")
-
             try:
-                _verify_metadata(config, target_path)
-            except (RuntimeError, subprocess.CalledProcessError) as exc:
-                log.write(str(exc), level="ERROR")
-                return 1
+                log.write(f"source snapshot: {source_snapshot.path}")
 
-            if source_path is None:
-                continue
+                try:
+                    _verify_metadata(config, target_path)
+                except (RuntimeError, subprocess.CalledProcessError) as exc:
+                    log.write(str(exc), level="ERROR")
+                    return 1
 
-            try:
-                mismatch = _verify_content(
-                    source_path,
-                    target_path,
-                    mode=args.mode,
-                    sample_size=args.sample_size,
-                )
-            except RuntimeError as exc:
-                log.write(str(exc), level="ERROR")
-                return 1
+                try:
+                    mismatch = _verify_content(
+                        source_snapshot.path,
+                        target_path,
+                        mode=args.mode,
+                        sample_size=args.sample_size,
+                    )
+                except RuntimeError as exc:
+                    log.write(str(exc), level="ERROR")
+                    return 1
 
-            if mismatch:
-                log.write(mismatch, level="ERROR")
-                return 1
+                if mismatch:
+                    log.write(mismatch, level="ERROR")
+                    return 1
+            finally:
+                if source_snapshot and source_snapshot.cleanup_dataset:
+                    try:
+                        _cleanup_zfs_verify_clone(source_snapshot.cleanup_dataset)
+                    except subprocess.CalledProcessError as exc:
+                        log.write(
+                            f"failed to remove verify clone "
+                            f"{source_snapshot.cleanup_dataset}: {exc.stderr or exc}",
+                            level="ERROR",
+                        )
+                        return 1
 
         log.write("restore verification passed")
         return 0
@@ -167,30 +179,17 @@ def _resolve_source_snapshot(
     requested: str | None,
     config: dict,
     source: str,
-) -> str:
+) -> _ResolvedSourceSnapshot:
     if requested:
         path = os.path.abspath(requested)
         if not os.path.isdir(path):
             raise ValueError(f"source snapshot missing: {path}")
-        return path
+        return _ResolvedSourceSnapshot(path)
 
     if backend_name(config) == "zfs":
         return _resolve_zfs_source_snapshot(config, source)
-    return _resolve_btrfs_source_snapshot(config["paths"]["snapshots_dir"], source)
-
-
-def _should_verify_metadata_only(
-    requested_source_snapshot: str | None,
-    config: dict,
-    exc: ValueError,
-) -> bool:
-    if requested_source_snapshot is not None:
-        return False
-    if backend_name(config) != "zfs":
-        return False
-    message = str(exc)
-    return message.startswith("source snapshot missing:") or message.startswith(
-        "no ZFS snapshots found"
+    return _ResolvedSourceSnapshot(
+        _resolve_btrfs_source_snapshot(config["paths"]["snapshots_dir"], source)
     )
 
 
@@ -219,7 +218,10 @@ def _resolve_btrfs_source_snapshot(snapshots_dir: str, source: str) -> str:
     return candidates[0][1]
 
 
-def _resolve_zfs_source_snapshot(config: dict, source: str) -> str:
+def _resolve_zfs_source_snapshot(
+    config: dict,
+    source: str,
+) -> _ResolvedSourceSnapshot:
     zfs_cfg = config["zfs"]
     snapshot_prefix = zfs_cfg["snapshot_prefix"]
     snapshots = zfs_harness.list_snapshots(source)
@@ -230,10 +232,64 @@ def _resolve_zfs_source_snapshot(config: dict, source: str) -> str:
     ]
     if not candidates:
         raise ValueError(f"no ZFS snapshots found for {source}")
-    snapshot_path = zfs_snapshot_mount_path(config, source, candidates[-1])
+    snapshot = candidates[-1]
+    snapshot_path = zfs_snapshot_mount_path(config, source, snapshot)
     if not os.path.isdir(snapshot_path):
-        raise ValueError(f"source snapshot missing: {snapshot_path}")
-    return snapshot_path
+        clone_dataset = _verify_clone_dataset(config, source)
+        zfs_harness.clone_snapshot(snapshot, clone_dataset)
+        clone_path = zfs_dataset_mount_path(config, clone_dataset)
+        if not os.path.isdir(clone_path):
+            try:
+                _cleanup_zfs_verify_clone(clone_dataset)
+            except subprocess.CalledProcessError:
+                pass
+            raise ValueError(f"source snapshot clone missing: {clone_path}")
+        return _ResolvedSourceSnapshot(
+            clone_path,
+            cleanup_dataset=clone_dataset,
+        )
+    return _ResolvedSourceSnapshot(snapshot_path)
+
+
+def _verify_clone_dataset(config: dict, source: str) -> str:
+    zfs_cfg = config["zfs"]
+    pool_name = zfs_cfg["pool_name"]
+    receive_parent = zfs_cfg["receive_parent_dataset"]
+    if receive_parent == pool_name or receive_parent.startswith(pool_name + "/"):
+        parent_dataset = receive_parent
+    else:
+        parent_dataset = f"{pool_name}/{receive_parent}"
+    token = target_token(source)
+    return f"{parent_dataset}/__verify__{token}__{uuid.uuid4().hex}"
+
+
+def _cleanup_zfs_verify_clone(clone_dataset: str) -> None:
+    last_error: subprocess.CalledProcessError | None = None
+    try:
+        zfs_harness.unmount_dataset(clone_dataset, force=True)
+    except subprocess.CalledProcessError as exc:
+        if not zfs_harness.dataset_exists(clone_dataset):
+            return
+        last_error = exc
+
+    for attempt in range(VERIFY_CLONE_DESTROY_ATTEMPTS):
+        try:
+            zfs_harness.destroy_dataset(
+                clone_dataset,
+                recursive=True,
+                force=True,
+            )
+            return
+        except subprocess.CalledProcessError as exc:
+            if not zfs_harness.dataset_exists(clone_dataset):
+                return
+            last_error = exc
+            if attempt == VERIFY_CLONE_DESTROY_ATTEMPTS - 1:
+                break
+            time.sleep(VERIFY_CLONE_DESTROY_DELAY_SECONDS)
+
+    if last_error is not None:
+        raise last_error
 
 
 def _resolve_target_path(

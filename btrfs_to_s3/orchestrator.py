@@ -20,6 +20,7 @@ from btrfs_to_s3.filesystems import (
     FilesystemBackend,
     create_filesystem_backend,
 )
+from btrfs_to_s3.filesystems.base import RestoreBackendError
 from btrfs_to_s3.lock import LockError, LockFile
 from btrfs_to_s3.manifest import (
     MANIFEST_VERSION,
@@ -651,24 +652,29 @@ class RestoreOrchestrator:
         if verify_mode == "none":
             self.logger.info("event=restore_verify_skipped mode=none")
             return 0
-        source_path = self._resolve_verify_source(
-            source_name,
-            manifests,
-            restore_operations,
-        )
-        if source_path is None:
-            self.logger.info(
-                "event=restore_verify_metadata_only reason=source_unresolvable source=%s snapshot=%s",
-                source_name,
-                manifests[-1].snapshot_reference if manifests else "unknown",
-            )
-        elif not source_path.exists():
-            self.logger.info(
-                "event=restore_verify_metadata_only reason=source_missing path=%s",
-                source_path,
-            )
-            source_path = None
+        cleanup_error: RestoreBackendError | None = None
         try:
+            source_path = self._resolve_verify_source(
+                source_name,
+                manifests,
+                restore_operations,
+            )
+        except RestoreBackendError as exc:
+            self.logger.error("event=restore_verify_failed error=%s", exc)
+            return 1
+        try:
+            if source_path is None:
+                self.logger.info(
+                    "event=restore_verify_metadata_only reason=source_unresolvable source=%s snapshot=%s",
+                    source_name,
+                    manifests[-1].snapshot_reference if manifests else "unknown",
+                )
+            elif not source_path.exists():
+                self.logger.info(
+                    "event=restore_verify_metadata_only reason=source_missing path=%s",
+                    source_path,
+                )
+                source_path = None
             verify_restore(
                 source_path,
                 target_path,
@@ -678,6 +684,16 @@ class RestoreOrchestrator:
             )
         except RestoreError as exc:
             self.logger.error("event=restore_verify_failed error=%s", exc)
+            return 1
+        finally:
+            try:
+                restore_operations.cleanup_verify_source(source_path)
+            except RestoreBackendError as exc:
+                cleanup_error = exc
+        if cleanup_error is not None:
+            self.logger.error(
+                "event=restore_verify_cleanup_failed error=%s", cleanup_error
+            )
             return 1
         self.logger.info(
             "event=restore_verify_complete status=ok mode=%s", verify_mode

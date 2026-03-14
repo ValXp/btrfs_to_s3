@@ -522,11 +522,12 @@ class ZFSRestoreOperationsTests(unittest.TestCase):
             runner=mock.Mock(),
         )
 
-        resolved = operations.resolve_verify_source(
-            "tank/data",
-            None,
-            "tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__full",
-        )
+        with mock.patch.object(operations, "_path_is_dir", return_value=True):
+            resolved = operations.resolve_verify_source(
+                "tank/data",
+                None,
+                "tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__full",
+            )
 
         self.assertEqual(
             resolved,
@@ -535,6 +536,135 @@ class ZFSRestoreOperationsTests(unittest.TestCase):
                 "btrfs-to-s3-tank_x2f_data__20260101T000000Z__full"
             ),
         )
+
+    def test_resolve_verify_source_clones_when_snapshot_mount_missing(self) -> None:
+        runner = mock.Mock(
+            return_value=subprocess.CompletedProcess(
+                args=["zfs", "clone"],
+                returncode=0,
+                stdout="",
+                stderr="",
+            )
+        )
+        operations = ZFSRestoreOperations(
+            receive_parent_dataset="tank/restore",
+            restore_base_dir=Path("/tank/restore"),
+            pool_name="tank",
+            mount_root=Path("/tank"),
+            runner=runner,
+        )
+
+        with mock.patch.object(
+            operations,
+            "_path_is_dir",
+            side_effect=[False, True],
+        ), mock.patch(
+            "btrfs_to_s3.filesystems.zfs.uuid.uuid4",
+            return_value=mock.Mock(hex="abc123"),
+        ):
+            resolved = operations.resolve_verify_source(
+                "tank/data",
+                None,
+                "tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__full",
+            )
+
+        self.assertEqual(
+            resolved,
+            Path("/tank/restore/__verify__tank_x2f_data__abc123"),
+        )
+        runner.assert_called_once_with(
+            [
+                "zfs",
+                "clone",
+                "-o",
+                "readonly=on",
+                "tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__full",
+                "tank/restore/__verify__tank_x2f_data__abc123",
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+            env=mock.ANY,
+        )
+
+    def test_cleanup_verify_source_destroys_temporary_clone(self) -> None:
+        runner = mock.Mock(
+            return_value=subprocess.CompletedProcess(
+                args=["zfs", "cmd"],
+                returncode=0,
+                stdout="",
+                stderr="",
+            )
+        )
+        operations = ZFSRestoreOperations(
+            receive_parent_dataset="tank/restore",
+            restore_base_dir=Path("/tank/restore"),
+            runner=runner,
+        )
+        source_path = Path("/tank/restore/__verify__tank_x2f_data__abc123")
+        operations._active_verify_sources[str(source_path)] = (
+            "tank/restore/__verify__tank_x2f_data__abc123"
+        )
+
+        operations.cleanup_verify_source(source_path)
+
+        self.assertEqual(
+            runner.call_args_list,
+            [
+                mock.call(
+                    ["zfs", "unmount", "-f", "tank/restore/__verify__tank_x2f_data__abc123"],
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                    env=mock.ANY,
+                ),
+                mock.call(
+                    ["zfs", "destroy", "-r", "-f", "tank/restore/__verify__tank_x2f_data__abc123"],
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                    env=mock.ANY,
+                ),
+            ],
+        )
+        self.assertEqual(operations._active_verify_sources, {})
+
+    def test_cleanup_verify_source_retries_when_destroy_fails_but_dataset_remains(self) -> None:
+        destroy_error = subprocess.CalledProcessError(
+            1,
+            ["zfs", "destroy"],
+            stderr="dataset busy",
+        )
+        runner = mock.Mock(
+            side_effect=[
+                subprocess.CompletedProcess(["zfs", "unmount"], 0, "", ""),
+                destroy_error,
+                subprocess.CompletedProcess(["zfs", "destroy"], 0, "", ""),
+            ]
+        )
+        operations = ZFSRestoreOperations(
+            receive_parent_dataset="tank/restore",
+            restore_base_dir=Path("/tank/restore"),
+            runner=runner,
+        )
+        source_path = Path("/tank/restore/__verify__tank_x2f_data__abc123")
+        operations._active_verify_sources[str(source_path)] = (
+            "tank/restore/__verify__tank_x2f_data__abc123"
+        )
+
+        with mock.patch.object(
+            operations,
+            "_dataset_exists",
+            return_value=True,
+        ) as exists_mock, mock.patch(
+            "btrfs_to_s3.filesystems.zfs.time.sleep"
+        ) as sleep_mock:
+            operations.cleanup_verify_source(source_path)
+
+        exists_mock.assert_called_once_with(
+            "tank/restore/__verify__tank_x2f_data__abc123"
+        )
+        sleep_mock.assert_called_once_with(0.2)
 
 
 class CreateFilesystemBackendTests(unittest.TestCase):

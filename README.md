@@ -67,6 +67,15 @@ python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --source da
   --manifest-key subvol/data/full/manifest-20260101T000000Z.json --verify none
 ```
 
+When restore verification is enabled, the application always validates the
+restored target's backend metadata first. Content verification then compares
+the restored tree against a local source snapshot view. For Btrfs that usually
+comes from `snapshot.path`. For ZFS the application first tries
+`.zfs/snapshot/<name>` from the manifest's `snapshot.identity`; if that view is
+unavailable, it creates a temporary clone of the source snapshot under
+`zfs.receive_parent_dataset`, verifies against that clone, and removes it
+afterward.
+
 AWS credentials are detected via `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
 
 ## Configuration
@@ -223,7 +232,7 @@ You can copy `config.example.toml` as a starting point.
 
 `restore`:
 - `restore.target_base_dir`: default `/srv/restore`; absolute base directory for restore targets when not overridden by tooling.
-- `restore.verify_mode`: default `full`; one of `full|sample|none`; controls post-restore verification (content checks are skipped when source snapshots are unavailable).
+- `restore.verify_mode`: default `full`; one of `full|sample|none`; controls post-restore verification. Metadata checks always run unless set to `none`. ZFS content verification may create and destroy a temporary clone when `.zfs/snapshot/<name>` is unavailable on the restore host.
 - `restore.sample_max_files`: default `1000`; must be > 0; maximum files hashed in `sample` mode.
 - `restore.wait_for_restore`: default `true`; wait for archive-class restores to become available before downloading.
 - `restore.restore_timeout_seconds`: default `259200` (72 hours); must be > 0; timeout while waiting for archive restores.
@@ -238,6 +247,21 @@ You can copy `config.example.toml` as a starting point.
   path beneath that base is mapped onto child datasets of
   `zfs.receive_parent_dataset`, then the restored dataset is made writable and
   verified with `zfs get`.
+
+### Verification semantics
+
+- Restore always validates downloaded chunk hashes against the manifest before
+  feeding bytes into the backend receive path.
+- Restore always validates backend metadata after receive unless
+  `restore.verify_mode = "none"`.
+- Restore validates file content only when it can resolve a source snapshot
+  path locally.
+- For ZFS, the application first tries `.zfs/snapshot/<snapshot-name>` as that
+  source path. If the path is not available, it creates a temporary clone under
+  `zfs.receive_parent_dataset`, verifies against the clone, then destroys it.
+- The integration harness's
+  [verify_restore.py](/root/btrfs_to_s3/integration_tests/scripts/verify_restore.py)
+  uses the same ZFS strategy during harness verification.
 
 ### Manifest and state compatibility
 

@@ -102,6 +102,76 @@ class ZFSHarnessCommandTests(unittest.TestCase):
         )
         self.assertEqual(result, "tank/data")
 
+    def test_destroy_dataset_builds_expected_command(self) -> None:
+        with mock.patch("integration_tests.harness.zfs.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            zfs.destroy_dataset("tank/data", recursive=True)
+
+        run.assert_called_once_with(
+            ["zfs", "destroy", "-r", "tank/data"],
+            check=True,
+            text=True,
+            capture_output=True,
+            env=mock.ANY,
+        )
+
+    def test_destroy_dataset_builds_expected_force_command(self) -> None:
+        with mock.patch("integration_tests.harness.zfs.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            zfs.destroy_dataset("tank/data", recursive=True, force=True)
+
+        run.assert_called_once_with(
+            ["zfs", "destroy", "-r", "-f", "tank/data"],
+            check=True,
+            text=True,
+            capture_output=True,
+            env=mock.ANY,
+        )
+
+    def test_unmount_dataset_builds_expected_force_command(self) -> None:
+        with mock.patch("integration_tests.harness.zfs.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            zfs.unmount_dataset("tank/data", force=True)
+
+        run.assert_called_once_with(
+            ["zfs", "unmount", "-f", "tank/data"],
+            check=True,
+            text=True,
+            capture_output=True,
+            env=mock.ANY,
+        )
+
+    def test_dataset_exists_returns_true_for_matching_dataset(self) -> None:
+        with mock.patch("integration_tests.harness.zfs.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                [],
+                0,
+                stdout="tank/data\n",
+                stderr="",
+            )
+            exists = zfs.dataset_exists("tank/data")
+
+        run.assert_called_once_with(
+            ["zfs", "list", "-H", "-o", "name", "tank/data"],
+            check=False,
+            text=True,
+            capture_output=True,
+            env=mock.ANY,
+        )
+        self.assertTrue(exists)
+
+    def test_dataset_exists_returns_false_when_missing(self) -> None:
+        with mock.patch("integration_tests.harness.zfs.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                [],
+                1,
+                stdout="",
+                stderr="dataset does not exist\n",
+            )
+            exists = zfs.dataset_exists("tank/data")
+
+        self.assertFalse(exists)
+
     def test_list_datasets_parses_output(self) -> None:
         with mock.patch("integration_tests.harness.zfs.subprocess.run") as run:
             run.return_value = subprocess.CompletedProcess(
@@ -134,6 +204,31 @@ class ZFSHarnessCommandTests(unittest.TestCase):
             env=mock.ANY,
         )
         self.assertEqual(result, "tank/data@snap-001")
+
+    def test_clone_snapshot_builds_expected_command(self) -> None:
+        with mock.patch("integration_tests.harness.zfs.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            result = zfs.clone_snapshot(
+                "tank/data@snap-001",
+                "tank/restore/clone-001",
+                clone_args=("-o", "readonly=on"),
+            )
+
+        run.assert_called_once_with(
+            [
+                "zfs",
+                "clone",
+                "-o",
+                "readonly=on",
+                "tank/data@snap-001",
+                "tank/restore/clone-001",
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+            env=mock.ANY,
+        )
+        self.assertEqual(result, "tank/restore/clone-001")
 
     def test_destroy_snapshot_builds_expected_command(self) -> None:
         with mock.patch("integration_tests.harness.zfs.subprocess.run") as run:

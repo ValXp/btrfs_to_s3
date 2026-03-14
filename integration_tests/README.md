@@ -61,13 +61,17 @@ How the ZFS harness differs
   `[filesystem].backend`. For ZFS configs it now runs the application-backed
   sequence: `seed_data.py`, `run_full.py`, `mutate_data.py`,
   `run_incremental.py --skip-mutate`, `run_interrupt.py`,
+  `verify_manifest.py`, `verify_s3.py`, `verify_retention.py`,
   `run_restore.py --source all`, and `verify_restore.py --source all`.
 - The standalone ZFS probe scripts (`run_zfs_snapshot_send_receive.py`,
   `run_zfs_incremental.py`, `run_zfs_retention.py`) are still available, but
   they are now manual diagnostics instead of the only ZFS path in `run_all.py`.
-- ZFS retention remains a standalone probe for now because
-  `verify_retention.py` is still Btrfs-specific; `run_all.py` focuses on the
-  application-backed backup/restore flow.
+- `verify_retention.py` now supports ZFS as well, so the default ZFS
+  `run_all.py` path covers retention checks in addition to backup/restore.
+- `verify_restore.py` mirrors the application's ZFS verification strategy. When
+  `.zfs/snapshot/<name>` is unavailable on the host, the script creates a
+  temporary clone of the source snapshot, compares the restored tree against
+  that clone, then unmounts and destroys the clone.
 
 BTRFS_TO_S3_CMD override
 - Optional: set `BTRFS_TO_S3_CMD` in `integration_tests/config/test.env` as a JSON array.
@@ -91,17 +95,23 @@ Quickstart
 5. Run the ZFS application-backed harness:
    - `sudo -E python3 integration_tests/scripts/run_all.py --config integration_tests/config/test_zfs.toml`
    - This runs setup, seed, full backup, mutate, incremental backup,
-     interrupt/retry, restore, verify_restore, and teardown.
+     interrupt/retry, manifest verification, S3 verification, retention
+     verification, restore, verify_restore, and teardown.
    - `--skip-s3` reduces the ZFS run to setup, seed, mutate, and teardown when
      you only want to validate the disposable fixture without AWS.
-6. Run individual ZFS application-backed steps manually (scripts use the harness runner):
+6. Run individual ZFS application-backed steps manually (use `sudo -E` for the
+   full ZFS flow so snapshot, receive, and temporary verify clones all have the
+   required privileges):
    - `sudo -E python3 integration_tests/scripts/setup_zfs.py --config integration_tests/config/test_zfs.toml`
-   - `python3 integration_tests/scripts/seed_data.py --config integration_tests/config/test_zfs.toml`
-   - `python3 integration_tests/scripts/run_full.py --config integration_tests/config/test_zfs.toml`
-   - `python3 integration_tests/scripts/run_incremental.py --config integration_tests/config/test_zfs.toml`
-   - `python3 integration_tests/scripts/run_interrupt.py --config integration_tests/config/test_zfs.toml --source tank/data`
-   - `python3 integration_tests/scripts/run_restore.py --config integration_tests/config/test_zfs.toml --source tank/data`
-   - `python3 integration_tests/scripts/verify_restore.py --config integration_tests/config/test_zfs.toml --source tank/data`
+   - `sudo -E python3 integration_tests/scripts/seed_data.py --config integration_tests/config/test_zfs.toml`
+   - `sudo -E python3 integration_tests/scripts/run_full.py --config integration_tests/config/test_zfs.toml`
+   - `sudo -E python3 integration_tests/scripts/run_incremental.py --config integration_tests/config/test_zfs.toml`
+   - `sudo -E python3 integration_tests/scripts/run_interrupt.py --config integration_tests/config/test_zfs.toml --source tank/data`
+   - `sudo -E python3 integration_tests/scripts/verify_manifest.py --config integration_tests/config/test_zfs.toml`
+   - `sudo -E python3 integration_tests/scripts/verify_s3.py --config integration_tests/config/test_zfs.toml`
+   - `sudo -E python3 integration_tests/scripts/verify_retention.py --config integration_tests/config/test_zfs.toml`
+   - `sudo -E python3 integration_tests/scripts/run_restore.py --config integration_tests/config/test_zfs.toml --source tank/data`
+   - `sudo -E python3 integration_tests/scripts/verify_restore.py --config integration_tests/config/test_zfs.toml --source tank/data`
    - `sudo -E python3 integration_tests/scripts/teardown_zfs.py --config integration_tests/config/test_zfs.toml`
 7. Run the standalone ZFS probe scripts manually when you need raw send/receive
    or retention diagnostics outside the application flow:
@@ -144,6 +154,10 @@ Privilege model
 - Run `integration_tests/scripts/setup_zfs.py` and `teardown_zfs.py` with sudo
   or equivalent privileges so the harness can create/destroy the disposable pool
   and its datasets.
+- For ZFS, keep the same privilege level for `run_full.py`, `run_incremental.py`,
+  `run_interrupt.py`, `run_restore.py`, `verify_retention.py`, and
+  `verify_restore.py` because they invoke `zfs snapshot`, `zfs receive`, or
+  temporary clone/unmount/destroy operations.
 
 Notes
 - Btrfs and ZFS setup/teardown steps require elevated privileges.

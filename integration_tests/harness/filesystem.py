@@ -96,6 +96,20 @@ def zfs_snapshot_mount_path(
     return os.path.join(source_mount, ".zfs", "snapshot", snapshot_name)
 
 
+def zfs_dataset_mount_path(
+    config: dict[str, Any],
+    dataset_identifier: str,
+) -> str:
+    if backend_name(config) != "zfs":
+        raise ValueError("dataset mount paths are only defined for ZFS configs")
+    zfs_cfg = config["zfs"]
+    mount_root = os.path.abspath(zfs_cfg["mount_root"])
+    return os.path.join(
+        mount_root,
+        _zfs_dataset_mount_path(zfs_cfg["pool_name"], dataset_identifier),
+    )
+
+
 def target_token(source_identifier: str) -> str:
     token = source_identifier.replace("\\", "/").strip("/")
     token = token.replace("/", "__")

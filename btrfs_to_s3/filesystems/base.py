@@ -125,6 +125,9 @@ class RestoreOperations(Protocol):
     ) -> Path | None:
         """Resolve a local content-verification source when one is accessible."""
 
+    def cleanup_verify_source(self, source: Path | None) -> None:
+        """Clean up any temporary verification source created by the backend."""
+
 
 def snapshot_name(subvolume_name: str, created_at: datetime, kind: str) -> str:
     if created_at.tzinfo is None:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +33,10 @@ from btrfs_to_s3.path_utils import ensure_sbin_on_path
 class _ReceiveContext:
     dataset: str
     target: Path
+
+
+VERIFY_CLONE_DESTROY_ATTEMPTS = 5
+VERIFY_CLONE_DESTROY_DELAY_SECONDS = 0.2
 
 
 class ZFSSnapshotManager(SnapshotOperations):
@@ -200,6 +206,7 @@ class ZFSRestoreOperations(RestoreOperations):
         self._popen = popen or subprocess.Popen
         self._runner = runner or subprocess.run
         self._active_receives: dict[int, _ReceiveContext] = {}
+        self._active_verify_sources: dict[str, str] = {}
 
     def open_receive(
         self,
@@ -304,7 +311,6 @@ class ZFSRestoreOperations(RestoreOperations):
         snapshot_path: str | None,
         snapshot_identity: str | None,
     ) -> Path | None:
-        del source_name
         del snapshot_path
         if self.pool_name is None or self.mount_root is None:
             return None
@@ -312,14 +318,50 @@ class ZFSRestoreOperations(RestoreOperations):
         if dataset_snapshot is None:
             return None
         dataset, snapshot_name_value = dataset_snapshot
-        mount_path = _dataset_mount_path(
-            self.mount_root,
-            self.pool_name,
-            dataset,
-        )
-        if mount_path is None:
+        snapshot_path_value = self._snapshot_mount_path(dataset, snapshot_name_value)
+        if snapshot_path_value is None:
             return None
-        return mount_path / ".zfs" / "snapshot" / snapshot_name_value
+        if self._path_is_dir(snapshot_path_value):
+            return snapshot_path_value
+
+        clone_dataset = self._verify_clone_dataset(source_name, dataset)
+        self._run(
+            [
+                "zfs",
+                "clone",
+                "-o",
+                "readonly=on",
+                f"{dataset}@{snapshot_name_value}",
+                clone_dataset,
+            ]
+        )
+        clone_path = self._dataset_mount_path(clone_dataset)
+        if clone_path is None:
+            try:
+                self._cleanup_verify_clone(clone_dataset)
+            except RestoreBackendError:
+                pass
+            raise RestoreBackendError(
+                f"verify clone dataset is outside restore base: {clone_dataset}"
+            )
+        if not self._path_is_dir(clone_path):
+            try:
+                self._cleanup_verify_clone(clone_dataset)
+            except RestoreBackendError:
+                pass
+            raise RestoreBackendError(f"verify clone missing: {clone_path}")
+        self._active_verify_sources[self._verify_source_key(clone_path)] = clone_dataset
+        return clone_path
+
+    def cleanup_verify_source(self, source: Path | None) -> None:
+        if source is None:
+            return
+        clone_dataset = self._active_verify_sources.pop(
+            self._verify_source_key(source), None
+        )
+        if clone_dataset is None:
+            return
+        self._cleanup_verify_clone(clone_dataset)
 
     def _cleanup_failed_dataset(self, context: _ReceiveContext | None) -> str:
         if context is None:
@@ -352,6 +394,75 @@ class ZFSRestoreOperations(RestoreOperations):
             )
         except subprocess.CalledProcessError as exc:
             raise RestoreBackendError(_command_error(exc)) from exc
+
+    def _path_is_dir(self, path: Path) -> bool:
+        return path.is_dir()
+
+    def _snapshot_mount_path(
+        self,
+        dataset: str,
+        snapshot_name_value: str,
+    ) -> Path | None:
+        mount_path = _dataset_mount_path(
+            self.mount_root,
+            self.pool_name,
+            dataset,
+        )
+        if mount_path is None:
+            return None
+        return mount_path / ".zfs" / "snapshot" / snapshot_name_value
+
+    def _dataset_mount_path(self, dataset: str) -> Path | None:
+        relative = _dataset_relative_to_parent(self.receive_parent_dataset, dataset)
+        if relative is None:
+            return None
+        if relative == ".":
+            return self.restore_base_dir
+        return self.restore_base_dir / Path(relative)
+
+    def _verify_clone_dataset(self, source_name: str, dataset: str) -> str:
+        token_source = source_name or dataset
+        token = _dataset_token(token_source)
+        return f"{self.receive_parent_dataset}/__verify__{token}__{uuid.uuid4().hex}"
+
+    def _verify_source_key(self, source: Path) -> str:
+        return os.path.abspath(str(source))
+
+    def _cleanup_verify_clone(self, clone_dataset: str) -> None:
+        last_error: RestoreBackendError | None = None
+        try:
+            self._run(["zfs", "unmount", "-f", clone_dataset])
+        except RestoreBackendError as exc:
+            if not self._dataset_exists(clone_dataset):
+                return
+            last_error = exc
+
+        for attempt in range(VERIFY_CLONE_DESTROY_ATTEMPTS):
+            try:
+                self._run(["zfs", "destroy", "-r", "-f", clone_dataset])
+                return
+            except RestoreBackendError as exc:
+                if not self._dataset_exists(clone_dataset):
+                    return
+                last_error = exc
+                if attempt == VERIFY_CLONE_DESTROY_ATTEMPTS - 1:
+                    break
+                time.sleep(VERIFY_CLONE_DESTROY_DELAY_SECONDS)
+
+        if last_error is not None:
+            raise last_error
+
+    def _dataset_exists(self, dataset: str) -> bool:
+        result = self._runner(
+            ["zfs", "list", "-H", "-o", "name", dataset],
+            check=False,
+            text=True,
+            capture_output=True,
+            env=_command_env(),
+        )
+        if result.returncode != 0:
+            return False
+        return any(line.strip() == dataset for line in result.stdout.splitlines())
 
     def _target_dataset(self, target: Path) -> str:
         try:
@@ -450,6 +561,18 @@ def _dataset_mount_path(
     if not dataset.startswith(prefix):
         return None
     return mount_root / dataset[len(prefix) :]
+
+
+def _dataset_relative_to_parent(
+    parent_dataset: str,
+    dataset: str,
+) -> str | None:
+    if dataset == parent_dataset:
+        return "."
+    prefix = f"{parent_dataset}/"
+    if not dataset.startswith(prefix):
+        return None
+    return dataset[len(prefix) :]
 
 
 def _decode_stderr(stderr: bytes) -> str:

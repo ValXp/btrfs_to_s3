@@ -389,7 +389,43 @@ class VerifyRestoreScriptTests(unittest.TestCase):
                     "tank/data",
                 )
 
-        self.assertEqual(result, str(snapshot_dir))
+        self.assertEqual(result.path, str(snapshot_dir))
+        self.assertIsNone(result.cleanup_dataset)
+
+    def test_resolve_zfs_source_snapshot_clones_when_snapshot_mount_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            mount_root = Path(config["zfs"]["mount_root"])
+            snapshot_name = "probe-data__20260313T221500Z__full"
+            clone_dir = mount_root / "restore" / "__verify__tank__data__abc123"
+
+            def clone_snapshot(snapshot: str, clone_dataset: str) -> None:
+                self.assertEqual(snapshot, f"tank/data@{snapshot_name}")
+                self.assertEqual(clone_dataset, "tank/restore/__verify__tank__data__abc123")
+                clone_dir.mkdir(parents=True)
+
+            with mock.patch.object(
+                verify_restore.zfs_harness,
+                "list_snapshots",
+                return_value=[f"tank/data@{snapshot_name}"],
+            ), mock.patch.object(
+                verify_restore.zfs_harness,
+                "clone_snapshot",
+                side_effect=clone_snapshot,
+            ) as clone_mock, mock.patch.object(
+                verify_restore.uuid,
+                "uuid4",
+                return_value=SimpleNamespace(hex="abc123"),
+            ):
+                result = verify_restore._resolve_source_snapshot(
+                    None,
+                    config,
+                    "tank/data",
+                )
+
+        self.assertEqual(result.path, str(clone_dir))
+        self.assertEqual(result.cleanup_dataset, "tank/restore/__verify__tank__data__abc123")
+        clone_mock.assert_called_once()
 
     def test_verify_metadata_checks_zfs_dataset_properties(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -477,13 +513,14 @@ class VerifyRestoreScriptTests(unittest.TestCase):
         verify_metadata_mock.assert_called_once_with(config, str(target_dir))
         self.assertIn(("INFO", "restore verification passed"), log.entries)
 
-    def test_main_falls_back_to_metadata_only_when_zfs_source_snapshot_missing(self) -> None:
+    def test_main_clones_zfs_source_snapshot_when_mount_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _zfs_config(tmpdir)
             config_path = str(Path(tmpdir) / "test_zfs.toml")
             mount_root = Path(config["zfs"]["mount_root"])
             target_dir = mount_root / "restore" / "data-target"
             target_dir.mkdir(parents=True)
+            clone_dir = mount_root / "restore" / "__verify__tank__data__abc123"
 
             metadata_path = (
                 Path(config["paths"]["run_dir"]) / verify_restore.RESTORE_TARGETS_FILE
@@ -504,6 +541,11 @@ class VerifyRestoreScriptTests(unittest.TestCase):
             )
             log = RecordingLog()
 
+            def clone_snapshot(snapshot: str, clone_dataset: str) -> None:
+                self.assertEqual(snapshot, "tank/data@probe-data__20260313T221500Z__full")
+                self.assertEqual(clone_dataset, "tank/restore/__verify__tank__data__abc123")
+                clone_dir.mkdir(parents=True)
+
             with mock.patch.object(
                 verify_restore, "load_config", return_value=config
             ), mock.patch.object(
@@ -513,9 +555,23 @@ class VerifyRestoreScriptTests(unittest.TestCase):
                 "list_snapshots",
                 return_value=["tank/data@probe-data__20260313T221500Z__full"],
             ), mock.patch.object(
+                verify_restore.zfs_harness,
+                "clone_snapshot",
+                side_effect=clone_snapshot,
+            ) as clone_mock, mock.patch.object(
+                verify_restore.zfs_harness,
+                "unmount_dataset",
+            ) as unmount_mock, mock.patch.object(
+                verify_restore.zfs_harness,
+                "destroy_dataset",
+            ) as destroy_mock, mock.patch.object(
+                verify_restore.uuid,
+                "uuid4",
+                return_value=SimpleNamespace(hex="abc123"),
+            ), mock.patch.object(
                 verify_restore, "_verify_metadata"
             ) as verify_metadata_mock, mock.patch.object(
-                verify_restore, "_verify_content"
+                verify_restore, "_verify_content", return_value=None
             ) as verify_content_mock, mock.patch.object(
                 verify_restore.sys,
                 "argv",
@@ -525,15 +581,92 @@ class VerifyRestoreScriptTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         verify_metadata_mock.assert_called_once_with(config, str(target_dir))
-        verify_content_mock.assert_not_called()
+        verify_content_mock.assert_called_once_with(
+            str(clone_dir),
+            str(target_dir),
+            mode="full",
+            sample_size=verify_restore.DEFAULT_SAMPLE_SIZE,
+        )
+        clone_mock.assert_called_once()
+        unmount_mock.assert_called_once_with(
+            "tank/restore/__verify__tank__data__abc123",
+            force=True,
+        )
+        destroy_mock.assert_called_once_with(
+            "tank/restore/__verify__tank__data__abc123",
+            recursive=True,
+            force=True,
+        )
         self.assertIn(
             (
-                "WARN",
-                "source snapshot unavailable for tank/data; verifying restore metadata only",
+                "INFO",
+                f"source snapshot: {clone_dir}",
             ),
             log.entries,
         )
         self.assertIn(("INFO", "restore verification passed"), log.entries)
+
+    def test_cleanup_zfs_verify_clone_retries_busy_destroy(self) -> None:
+        busy_error = subprocess.CalledProcessError(
+            1,
+            ["zfs", "destroy"],
+            stderr="cannot destroy 'tank/restore/clone': dataset is busy\n",
+        )
+
+        with mock.patch.object(
+            verify_restore.zfs_harness,
+            "unmount_dataset",
+        ) as unmount_mock, mock.patch.object(
+            verify_restore.zfs_harness,
+            "dataset_exists",
+            return_value=True,
+        ) as exists_mock, mock.patch.object(
+            verify_restore.zfs_harness,
+            "destroy_dataset",
+            side_effect=[busy_error, None],
+        ) as destroy_mock, mock.patch.object(
+            verify_restore.time,
+            "sleep",
+        ) as sleep_mock:
+            verify_restore._cleanup_zfs_verify_clone("tank/restore/clone")
+
+        unmount_mock.assert_called_once_with("tank/restore/clone", force=True)
+        exists_mock.assert_called_once_with("tank/restore/clone")
+        self.assertEqual(
+            destroy_mock.call_args_list,
+            [
+                mock.call("tank/restore/clone", recursive=True, force=True),
+                mock.call("tank/restore/clone", recursive=True, force=True),
+            ],
+        )
+        sleep_mock.assert_called_once_with(
+            verify_restore.VERIFY_CLONE_DESTROY_DELAY_SECONDS
+        )
+
+    def test_cleanup_zfs_verify_clone_ignores_unmount_failure_when_dataset_missing(self) -> None:
+        unmount_error = subprocess.CalledProcessError(
+            1,
+            ["zfs", "unmount"],
+            stderr="dataset does not exist\n",
+        )
+
+        with mock.patch.object(
+            verify_restore.zfs_harness,
+            "unmount_dataset",
+            side_effect=unmount_error,
+        ) as unmount_mock, mock.patch.object(
+            verify_restore.zfs_harness,
+            "dataset_exists",
+            return_value=False,
+        ) as exists_mock, mock.patch.object(
+            verify_restore.zfs_harness,
+            "destroy_dataset",
+        ) as destroy_mock:
+            verify_restore._cleanup_zfs_verify_clone("tank/restore/clone")
+
+        unmount_mock.assert_called_once_with("tank/restore/clone", force=True)
+        exists_mock.assert_called_once_with("tank/restore/clone")
+        destroy_mock.assert_not_called()
 
 
 def _zfs_config(tmpdir: str) -> dict[str, object]:

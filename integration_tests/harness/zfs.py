@@ -84,6 +84,49 @@ def destroy_pool(pool_name: str) -> None:
     _run(["zpool", "destroy", "-f", pool_name])
 
 
+def destroy_dataset(
+    dataset: str,
+    *,
+    recursive: bool = False,
+    force: bool = False,
+) -> None:
+    """Destroy a dataset."""
+    command = ["zfs", "destroy"]
+    if recursive:
+        command.append("-r")
+    if force:
+        command.append("-f")
+    command.append(dataset)
+    _run(command)
+
+
+def unmount_dataset(
+    dataset: str,
+    *,
+    force: bool = False,
+) -> None:
+    """Unmount a dataset."""
+    command = ["zfs", "unmount"]
+    if force:
+        command.append("-f")
+    command.append(dataset)
+    _run(command)
+
+
+def dataset_exists(dataset: str) -> bool:
+    """Return whether a dataset currently exists."""
+    result = subprocess.run(
+        ["zfs", "list", "-H", "-o", "name", dataset],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=_command_env(),
+    )
+    if result.returncode != 0:
+        return False
+    return any(line.strip() == dataset for line in result.stdout.splitlines())
+
+
 def create_dataset(
     dataset: str,
     *,
@@ -135,6 +178,20 @@ def destroy_snapshot(
         command.append("-d")
     command.append(snapshot)
     _run(command)
+
+
+def clone_snapshot(
+    snapshot: str,
+    clone_dataset: str,
+    *,
+    clone_args: Sequence[str] = (),
+) -> str:
+    """Clone a snapshot to a writable dataset and return the clone name."""
+    command = ["zfs", "clone"]
+    command.extend(clone_args)
+    command.extend([snapshot, clone_dataset])
+    _run(command)
+    return clone_dataset
 
 
 def open_zfs_send(

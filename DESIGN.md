@@ -63,7 +63,9 @@ config and orchestrators are backend-aware.
    - Ensure objects are restored and ready for download (Glacier/Deep Archive).
    - Download chunks, validate hashes, reassemble stream.
    - Run the selected backend's receive/apply flow into the target path.
-   - Validate restored data (backend metadata + file content hashes).
+   - Validate restored data (backend metadata always; file content hashes using
+     a local source snapshot path or a backend-provided temporary verification
+     source when needed).
 
 ## Data flow per run
 1. Acquire lock.
@@ -91,7 +93,8 @@ config and orchestrators are backend-aware.
    - Reassemble stream and feed it into the backend restore operations.
 5. Validate restored data:
    - Backend metadata checks.
-   - File content checks (hash/size for a deterministic sample or full tree, configurable).
+   - File content checks (hash/size for a deterministic sample or full tree,
+     configurable) when the backend can provide a local verification source.
 
 ## Source and snapshot identity
 
@@ -336,6 +339,20 @@ ZFS:
 - Example: `receive_parent_dataset = "tank/restore"` and
   `target_base_dir = "/tank/restore"` means `--target /tank/restore/data/app`
   restores into dataset `tank/restore/data/app`.
+
+## Current verification behavior
+
+- Restore always validates downloaded chunk SHA-256 values against the manifest
+  before passing bytes into the backend receive path.
+- Restore always validates backend metadata after receive unless verification is
+  disabled.
+- Restore validates file content only when a local source snapshot path can be
+  resolved or the backend can create a temporary verification source.
+- Btrfs usually resolves that path from `snapshot.path`.
+- ZFS first resolves `.zfs/snapshot/<snapshot-name>` from `snapshot.identity`.
+  If that view is unavailable on the restore host, the application and the
+  integration harness both create a temporary clone under
+  `zfs.receive_parent_dataset`, verify against that clone, then destroy it.
 
 ## Systemd
 - Service: `btrfs_to_s3.service` running `backup`.

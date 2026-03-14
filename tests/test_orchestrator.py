@@ -25,6 +25,7 @@ from btrfs_to_s3.filesystems import (
     BackupSource,
     FilesystemBackend,
 )
+from btrfs_to_s3.filesystems.base import RestoreBackendError
 from btrfs_to_s3.orchestrator import (
     BackupOrchestrator,
     BackupRequest,
@@ -1084,6 +1085,9 @@ class OrchestratorRestoreTests(unittest.TestCase):
                 sample_max_files=100,
                 restore_operations=restore_operations,
             )
+            restore_operations.cleanup_verify_source.assert_called_once_with(
+                source_path
+            )
 
     def test_verify_restore_logs_metadata_only_when_source_is_unresolvable(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1133,6 +1137,56 @@ class OrchestratorRestoreTests(unittest.TestCase):
                     "event=restore_verify_metadata_only"
                     in entry
                     and "reason=source_unresolvable" in entry
+                    for entry in logs.output
+                )
+            )
+            restore_operations.cleanup_verify_source.assert_called_once_with(None)
+
+    def test_verify_restore_logs_cleanup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_zfs_config(temp_dir)
+            orchestrator = RestoreOrchestrator(
+                config, logger=logging.getLogger("btrfs_to_s3.orchestrator_test")
+            )
+            source_path = Path(temp_dir) / "source"
+            source_path.mkdir()
+            manifest = ManifestInfo(
+                key="key",
+                kind="full",
+                parent_manifest=None,
+                chunks=(),
+                s3={},
+                snapshot_path=None,
+                filesystem="zfs",
+                snapshot_identity=(
+                    "tank/data@btrfs-to-s3-"
+                    "tank_x2f_data__20260101T000000Z__full"
+                ),
+            )
+            restore_operations = mock.Mock()
+            restore_operations.resolve_verify_source.return_value = source_path
+            restore_operations.cleanup_verify_source.side_effect = (
+                RestoreBackendError("cleanup failed")
+            )
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.verify_restore"
+            ) as verify, self.assertLogs(
+                "btrfs_to_s3.orchestrator_test", level="ERROR"
+            ) as logs:
+                result = orchestrator._verify_restore(
+                    "full",
+                    "tank/data",
+                    [manifest],
+                    Path(temp_dir) / "restore",
+                    restore_operations,
+                )
+
+            self.assertEqual(result, 1)
+            verify.assert_called_once()
+            self.assertTrue(
+                any(
+                    "event=restore_verify_cleanup_failed" in entry
                     for entry in logs.output
                 )
             )

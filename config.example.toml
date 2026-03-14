@@ -53,6 +53,9 @@ sse = "AES256"
 target_base_dir = "/srv/restore"
 # For ZFS, set target_base_dir to the mounted path of zfs.receive_parent_dataset,
 # for example "/tank/restore".
+# When verification is enabled for ZFS, the application prefers
+# ".zfs/snapshot/<name>" and falls back to a temporary clone under
+# zfs.receive_parent_dataset if needed.
 verify_mode = "full" # full|sample|none
 sample_max_files = 1000
 wait_for_restore = true
