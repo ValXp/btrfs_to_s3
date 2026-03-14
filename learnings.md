@@ -53,3 +53,7 @@ Learnings
 - FYI: state now treats `last_snapshot` as the backend snapshot identity and persists optional `last_snapshot_name`/`last_snapshot_path`; planner uses the name for availability checks and the identity for incremental send parents.
 - FYI: the local `python3 -m pytest` shim still runs the full suite even when you pass test file selectors, so invoking multiple `python3 -m pytest ...` commands in parallel can trip CLI lock-contention tests.
 - FYI: CLI `--source` values are backend-specific identifiers: Btrfs uses the basename of each configured path, while ZFS runs are easiest to operate with fully qualified dataset names such as `tank/data` because those are what manifests and current pointers record.
+- FYI: Debian 13's `zfs-fuse` package provides working `zfs`/`zpool` commands for the live standalone probes, but it rejects `compression=zstd`; the ZFS harness template now defaults to `compression=on`.
+- FYI: `integration_tests/scripts/setup_zfs.py` needs to log `CalledProcessError.stderr` directly on live failures or the actionable `zpool`/`zfs` error message is lost.
+- FYI: `integration_tests/scripts/run_all.py` runs the standalone ZFS probes against one disposable pool, so the incremental probe must use its own receive dataset (`.../data-incremental`) instead of reusing the full probe's `restore/data`.
+- FYI: Without `AWS_*` credentials or `integration_tests/config/test.env`, the application-backed ZFS backup path logs `event=backup_no_s3 status=skipped`, so Task 37 cannot complete its live backup/restore validation in this environment.

@@ -1,4 +1,4 @@
-"""Restore a subvolume into a new target path."""
+"""Restore a configured source into a new target path."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ if TESTING_DIR not in sys.path:
 from harness.aws import create_s3_client, list_objects, read_object
 from harness.config import load_config
 from harness.env import load_env
+from harness.filesystem import restore_base_dir, source_identifiers, target_token
 from harness.logs import open_log
 from harness.runner import run_tool
 from harness import manifest as manifest_lib
@@ -31,9 +32,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run a restore into a new target.")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument(
+        "--source",
         "--subvolume",
+        dest="source",
         default=None,
-        help="Subvolume name or 'all' to restore every subvolume.",
+        help="Source identifier or 'all' to restore every configured source.",
     )
     parser.add_argument("--target-base", default=None)
     parser.add_argument("--target-name", default=None)
@@ -62,35 +65,35 @@ def main() -> int:
     with open_log(log_path) as log:
         log.write(f"loading config from {config_path}")
         try:
-            subvolumes = _resolve_subvolumes(args.subvolume, config)
-            if len(subvolumes) > 1 and (args.manifest_key or args.use_incremental_manifest):
+            sources = _resolve_sources(args.source, config)
+            if len(sources) > 1 and (args.manifest_key or args.use_incremental_manifest):
                 raise ValueError(
-                    "--manifest-key and --use-incremental-manifest require a single subvolume"
+                    "--manifest-key and --use-incremental-manifest require a single source"
                 )
-            if len(subvolumes) > 1 and args.target:
-                raise ValueError("--target is only valid for a single subvolume")
-            if len(subvolumes) > 1 and args.target_name:
-                raise ValueError("--target-name is only valid for a single subvolume")
+            if len(sources) > 1 and args.target:
+                raise ValueError("--target is only valid for a single source")
+            if len(sources) > 1 and args.target_name:
+                raise ValueError("--target-name is only valid for a single source")
         except ValueError as exc:
             log.write(str(exc), level="ERROR")
             return 1
 
         restore_entries: list[dict[str, str]] = []
-        for subvolume in subvolumes:
+        for source in sources:
             try:
-                target_path = _resolve_target_path(args, paths, subvolume)
-                manifest_key = _resolve_manifest_key(args, config, subvolume, log)
+                target_path = _resolve_target_path(args, config, source)
+                manifest_key = _resolve_manifest_key(args, config, source, log)
             except ValueError as exc:
                 log.write(str(exc), level="ERROR")
                 return 1
 
-            log.write(f"restoring subvolume {subvolume} to {target_path}")
+            log.write(f"restoring source {source} to {target_path}")
             if manifest_key:
                 log.write(f"using manifest key {manifest_key}")
             if args.dry_run:
                 log.write("dry run: printing command only")
 
-            extra_args = ["restore", "--subvolume", subvolume, "--target", target_path]
+            extra_args = ["restore", "--source", source, "--target", target_path]
             if manifest_key:
                 extra_args.extend(["--manifest-key", manifest_key])
             if args.restore_timeout is not None:
@@ -103,13 +106,17 @@ def main() -> int:
                     dry_run=args.dry_run,
                 )
                 if result:
-                    _log_process(log, f"restore[{subvolume}]", result)
+                    _log_process(log, f"restore[{source}]", result)
                 if not args.dry_run:
                     restore_entries.append(
-                        {"subvolume": subvolume, "target_path": target_path}
+                        {
+                            "source": source,
+                            "subvolume": source,
+                            "target_path": target_path,
+                        }
                     )
             except subprocess.CalledProcessError as exc:
-                _log_process_error(log, f"restore[{subvolume}]", exc)
+                _log_process_error(log, f"restore[{source}]", exc)
                 return 1
             except Exception as exc:
                 log.write(f"restore failed: {exc}", level="ERROR")
@@ -121,17 +128,17 @@ def main() -> int:
     return 0
 
 
-def _resolve_subvolumes(requested: str | None, config: dict) -> list[str]:
-    subvolumes = config["btrfs"]["subvolumes"]
+def _resolve_sources(requested: str | None, config: dict) -> list[str]:
+    sources = source_identifiers(config)
     if requested is None:
-        if not subvolumes:
-            raise ValueError("config has no btrfs.subvolumes entries")
-        return [subvolumes[0]]
+        if not sources:
+            raise ValueError("config has no sources")
+        return [sources[0]]
     if requested == "all":
-        return list(subvolumes)
-    if requested not in subvolumes:
+        return list(sources)
+    if requested not in sources:
         raise ValueError(
-            f"subvolume {requested} not in config list: {', '.join(subvolumes)}"
+            f"source {requested} not in config list: {', '.join(sources)}"
         )
     return [requested]
 
@@ -139,7 +146,7 @@ def _resolve_subvolumes(requested: str | None, config: dict) -> list[str]:
 def _resolve_manifest_key(
     args,
     config: dict,
-    subvolume: str,
+    source: str,
     log,
 ) -> str | None:
     if args.manifest_key and args.use_incremental_manifest:
@@ -154,7 +161,7 @@ def _resolve_manifest_key(
     prefix = aws_cfg.get("prefix", "")
     if prefix and not prefix.endswith("/"):
         prefix = f"{prefix}/"
-    manifest_prefix = f"{prefix}subvol/{subvolume}/incremental/"
+    manifest_prefix = f"{prefix}subvol/{source}/incremental/"
     objects = list_objects(client, aws_cfg["bucket"], manifest_prefix)
     manifest_keys = sorted(
         obj["Key"]
@@ -179,21 +186,20 @@ def _resolve_manifest_key(
     return manifest_key
 
 
-def _resolve_target_path(args, paths: dict[str, str], subvolume: str) -> str:
-    run_dir = os.path.abspath(paths["run_dir"])
-    mount_dir = os.path.abspath(paths["mount_dir"])
+def _resolve_target_path(args, config: dict, source: str) -> str:
+    target_root = os.path.abspath(restore_base_dir(config))
     if args.target:
         target = os.path.abspath(args.target)
-        _ensure_under_root(mount_dir, target)
+        _ensure_under_root(target_root, target)
     else:
         target_base = args.target_base
         if target_base is None:
-            target_base = os.path.join(mount_dir, "restore")
+            target_base = target_root
         target_base = os.path.abspath(target_base)
-        _ensure_under_root(mount_dir, target_base)
-        target_name = args.target_name or _default_target_name(subvolume)
+        _ensure_under_root(target_root, target_base)
+        target_name = args.target_name or _default_target_name(source)
         target = os.path.join(target_base, target_name)
-        _ensure_under_root(mount_dir, target)
+        _ensure_under_root(target_root, target)
 
     if os.path.exists(target):
         raise ValueError(f"target path already exists: {target}")
@@ -202,9 +208,9 @@ def _resolve_target_path(args, paths: dict[str, str], subvolume: str) -> str:
     return target
 
 
-def _default_target_name(subvolume: str) -> str:
+def _default_target_name(source: str) -> str:
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return f"{subvolume}__restore__{timestamp}"
+    return f"{target_token(source)}__restore__{timestamp}"
 
 
 def _write_restore_metadata(run_dir: str, entries: list[dict[str, str]]) -> None:
@@ -220,6 +226,7 @@ def _write_restore_metadata(run_dir: str, entries: list[dict[str, str]]) -> None
         json.dump(payload, handle, indent=2, sort_keys=True)
     if len(entries) == 1:
         single_payload = {
+            "source": entries[0]["source"],
             "subvolume": entries[0]["subvolume"],
             "target_path": entries[0]["target_path"],
             "written_at": written_at,

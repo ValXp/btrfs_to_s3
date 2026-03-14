@@ -156,7 +156,7 @@ class SetupZFSScriptTests(unittest.TestCase):
                 self.assertIn(
                     (
                         "ERROR",
-                        "setup failed: Command '['zfs', 'create']' returned non-zero exit status 1.",
+                        "setup failed: permission denied",
                     ),
                     log.entries,
                 )

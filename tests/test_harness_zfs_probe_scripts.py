@@ -156,11 +156,13 @@ class IncrementalZFSProbeScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _probe_config(tmpdir)
             log = RecordingLog()
-            receive_dataset = "tank/restore/data"
+            receive_dataset = "tank/restore/data-incremental"
             base_snapshot = "tank/data@probe-base"
             incremental_snapshot = "tank/data@probe-incremental"
-            received_base_snapshot = "tank/restore/data@probe-base"
-            received_incremental_snapshot = "tank/restore/data@probe-incremental"
+            received_base_snapshot = "tank/restore/data-incremental@probe-base"
+            received_incremental_snapshot = (
+                "tank/restore/data-incremental@probe-incremental"
+            )
             events: list[str] = []
 
             zfs_mock = mock.Mock()

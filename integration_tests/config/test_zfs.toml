@@ -19,8 +19,8 @@ mount_root = "integration_tests/run/zfs/mnt"
 source_datasets = ["data", "home"]
 receive_parent_dataset = "restore"
 snapshot_prefix = "btrfs-to-s3"
-zpool_create_args = ["-O", "compression=zstd", "-O", "atime=off"]
-zfs_create_args = ["-o", "compression=zstd"]
+zpool_create_args = ["-O", "compression=on", "-O", "atime=off"]
+zfs_create_args = ["-o", "compression=on"]
 
 [aws]
 region = "us-east-1"

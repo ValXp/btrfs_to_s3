@@ -17,7 +17,16 @@ if TESTING_DIR not in sys.path:
     sys.path.insert(0, TESTING_DIR)
 
 from harness.config import load_config
+from harness.filesystem import (
+    backend_name,
+    restore_base_dir,
+    restore_target_dataset,
+    source_identifiers,
+    target_token,
+    zfs_snapshot_mount_path,
+)
 from harness.logs import open_log
+from harness import zfs as zfs_harness
 
 
 DEFAULT_CONFIG = os.path.abspath(
@@ -29,12 +38,14 @@ RESTORE_TARGETS_FILE = "restore_targets.json"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Verify restored subvolume content.")
+    parser = argparse.ArgumentParser(description="Verify restored source content.")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument(
+        "--source",
         "--subvolume",
+        dest="source",
         default=None,
-        help="Subvolume name or 'all' to verify every restored subvolume.",
+        help="Source identifier or 'all' to verify every restored source.",
     )
     parser.add_argument("--source-snapshot", default=None)
     parser.add_argument("--target", default=None)
@@ -57,25 +68,25 @@ def main() -> int:
             log.write("restore verification skipped")
             return 0
         try:
-            subvolumes = _resolve_subvolumes(args.subvolume, config)
-            if len(subvolumes) > 1 and args.target:
-                raise ValueError("--target is only valid for a single subvolume")
+            sources = _resolve_sources(args.source, config)
+            if len(sources) > 1 and args.target:
+                raise ValueError("--target is only valid for a single source")
         except ValueError as exc:
             log.write(str(exc), level="ERROR")
             return 1
 
-        for subvolume in subvolumes:
+        for source in sources:
             try:
                 source_path = _resolve_source_snapshot(
                     args.source_snapshot,
-                    paths["snapshots_dir"],
-                    subvolume,
+                    config,
+                    source,
                 )
                 target_path = _resolve_target_path(
                     args,
-                    paths,
-                    subvolume,
-                    require_mapping=len(subvolumes) > 1,
+                    config,
+                    source,
+                    require_mapping=len(sources) > 1,
                 )
             except ValueError as exc:
                 log.write(str(exc), level="ERROR")
@@ -85,7 +96,7 @@ def main() -> int:
             log.write(f"target restore: {target_path}")
 
             try:
-                _verify_metadata(target_path)
+                _verify_metadata(config, target_path)
             except (RuntimeError, subprocess.CalledProcessError) as exc:
                 log.write(str(exc), level="ERROR")
                 return 1
@@ -121,32 +132,39 @@ def _config_disables_verify(config: dict) -> bool:
     return False
 
 
-def _resolve_subvolumes(requested: str | None, config: dict) -> list[str]:
-    subvolumes = config["btrfs"]["subvolumes"]
+def _resolve_sources(requested: str | None, config: dict) -> list[str]:
+    sources = source_identifiers(config)
     if requested is None:
-        if not subvolumes:
-            raise ValueError("config has no btrfs.subvolumes entries")
-        return [subvolumes[0]]
+        if not sources:
+            raise ValueError("config has no sources")
+        return [sources[0]]
     if requested == "all":
-        return list(subvolumes)
-    if requested not in subvolumes:
+        return list(sources)
+    if requested not in sources:
         raise ValueError(
-            f"subvolume {requested} not in config list: {', '.join(subvolumes)}"
+            f"source {requested} not in config list: {', '.join(sources)}"
         )
     return [requested]
 
 
 def _resolve_source_snapshot(
     requested: str | None,
-    snapshots_dir: str,
-    subvolume: str,
+    config: dict,
+    source: str,
 ) -> str:
-    snapshots_dir = os.path.abspath(snapshots_dir)
     if requested:
         path = os.path.abspath(requested)
         if not os.path.isdir(path):
             raise ValueError(f"source snapshot missing: {path}")
         return path
+
+    if backend_name(config) == "zfs":
+        return _resolve_zfs_source_snapshot(config, source)
+    return _resolve_btrfs_source_snapshot(config["paths"]["snapshots_dir"], source)
+
+
+def _resolve_btrfs_source_snapshot(snapshots_dir: str, source: str) -> str:
+    snapshots_dir = os.path.abspath(snapshots_dir)
 
     if not os.path.isdir(snapshots_dir):
         raise ValueError(f"snapshots dir missing: {snapshots_dir}")
@@ -157,25 +175,40 @@ def _resolve_source_snapshot(
         if parsed is None:
             continue
         name, created_at, _kind = parsed
-        if name != subvolume:
+        if name != source:
             continue
         path = os.path.join(snapshots_dir, entry)
         if os.path.isdir(path):
             candidates.append((created_at, path))
 
     if not candidates:
-        raise ValueError(
-            f"no snapshots found for {subvolume} under {snapshots_dir}"
-        )
+        raise ValueError(f"no snapshots found for {source} under {snapshots_dir}")
 
     candidates.sort(key=lambda item: item[0], reverse=True)
     return candidates[0][1]
 
 
+def _resolve_zfs_source_snapshot(config: dict, source: str) -> str:
+    zfs_cfg = config["zfs"]
+    snapshot_prefix = zfs_cfg["snapshot_prefix"]
+    snapshots = zfs_harness.list_snapshots(source)
+    candidates = [
+        snapshot
+        for snapshot in snapshots
+        if snapshot.startswith(f"{source}@{snapshot_prefix}-")
+    ]
+    if not candidates:
+        raise ValueError(f"no ZFS snapshots found for {source}")
+    snapshot_path = zfs_snapshot_mount_path(config, source, candidates[-1])
+    if not os.path.isdir(snapshot_path):
+        raise ValueError(f"source snapshot missing: {snapshot_path}")
+    return snapshot_path
+
+
 def _resolve_target_path(
     args,
-    paths: dict[str, str],
-    subvolume: str,
+    config: dict,
+    source: str,
     *,
     require_mapping: bool,
 ) -> str:
@@ -185,6 +218,7 @@ def _resolve_target_path(
             raise ValueError(f"restore target missing: {target_path}")
         return target_path
 
+    paths = config["paths"]
     run_dir = os.path.abspath(paths["run_dir"])
     targets_path = os.path.join(run_dir, RESTORE_TARGETS_FILE)
     if os.path.exists(targets_path):
@@ -194,12 +228,13 @@ def _resolve_target_path(
         except json.JSONDecodeError as exc:
             raise ValueError(f"invalid restore metadata: {targets_path}") from exc
         for entry in payload.get("targets", []):
-            if entry.get("subvolume") == subvolume:
+            entry_source = entry.get("source", entry.get("subvolume"))
+            if entry_source == source:
                 target_path = os.path.abspath(entry.get("target_path", ""))
                 if target_path and os.path.exists(target_path):
                     return target_path
         if require_mapping:
-            raise ValueError(f"restore target missing for {subvolume}")
+            raise ValueError(f"restore target missing for {source}")
 
     metadata_path = os.path.join(run_dir, RESTORE_METADATA_FILE)
     if os.path.exists(metadata_path):
@@ -214,9 +249,9 @@ def _resolve_target_path(
 
     target_base = args.target_base
     if target_base is None:
-        target_base = os.path.join(run_dir, "restore")
+        target_base = restore_base_dir(config)
     target_base = os.path.abspath(target_base)
-    target_path = os.path.join(target_base, subvolume)
+    target_path = os.path.join(target_base, target_token(source))
     if not os.path.exists(target_path):
         raise ValueError(
             "restore target missing; rerun run_restore.py or pass --target"
@@ -224,7 +259,14 @@ def _resolve_target_path(
     return target_path
 
 
-def _verify_metadata(target_path: str) -> None:
+def _verify_metadata(config: dict, target_path: str) -> None:
+    if backend_name(config) == "zfs":
+        _verify_zfs_metadata(config, target_path)
+        return
+    _verify_btrfs_metadata(target_path)
+
+
+def _verify_btrfs_metadata(target_path: str) -> None:
     if not os.path.isdir(target_path):
         raise RuntimeError(f"restore target is not a directory: {target_path}")
     if not os.access(target_path, os.W_OK):
@@ -234,6 +276,33 @@ def _verify_metadata(target_path: str) -> None:
     uuid_value = _parse_uuid(result.stdout)
     if uuid_value is None:
         raise RuntimeError("restore target has no valid UUID")
+
+
+def _verify_zfs_metadata(config: dict, target_path: str) -> None:
+    if not os.path.isdir(target_path):
+        raise RuntimeError(f"restore target is not a directory: {target_path}")
+    if not os.access(target_path, os.W_OK):
+        raise RuntimeError(f"restore target is not writable: {target_path}")
+
+    try:
+        dataset = restore_target_dataset(config, target_path)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    dataset_type = zfs_harness.get_dataset_property(dataset, "type")
+    if dataset_type != "filesystem":
+        raise RuntimeError(
+            f"restore target has unexpected dataset type: {dataset_type}"
+        )
+    mounted = zfs_harness.get_dataset_property(dataset, "mounted")
+    if mounted != "yes":
+        raise RuntimeError(f"restore target dataset is not mounted: {dataset}")
+    mountpoint = zfs_harness.get_dataset_property(dataset, "mountpoint")
+    if os.path.abspath(mountpoint) != os.path.abspath(target_path):
+        raise RuntimeError(f"restore target mountpoint mismatch: {mountpoint}")
+    readonly = zfs_harness.get_dataset_property(dataset, "readonly")
+    if readonly != "off":
+        raise RuntimeError(f"restore target is readonly: {target_path}")
 
 
 def _verify_content(

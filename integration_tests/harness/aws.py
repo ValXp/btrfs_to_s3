@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from typing import Any, Iterable
-import boto3
 
 
 def create_s3_client(region: str):
     """Create a boto3 S3 client."""
+    import boto3
+
     return boto3.client("s3", region_name=region)
 
 

@@ -12,6 +12,7 @@ if TESTING_DIR not in sys.path:
     sys.path.insert(0, TESTING_DIR)
 
 from harness.config import load_config
+from harness.filesystem import source_identifiers
 from harness.logs import open_log
 from harness.runner import run_tool
 
@@ -53,15 +54,15 @@ def main() -> int:
 
         try:
             log.write("forcing incremental run with --once")
-            subvolumes = config["btrfs"]["subvolumes"]
-            if not subvolumes:
-                log.write("no subvolumes configured", level="ERROR")
+            sources = source_identifiers(config)
+            if not sources:
+                log.write("no sources configured", level="ERROR")
                 return 1
-            for name in subvolumes:
-                log.write(f"running incremental backup for subvolume {name}")
+            for name in sources:
+                log.write(f"running incremental backup for source {name}")
                 result = run_tool(
                     config_path,
-                    ["backup", "--once", "--subvolume", name],
+                    ["backup", "--once", "--source", name],
                     dry_run=args.dry_run,
                 )
                 if result:

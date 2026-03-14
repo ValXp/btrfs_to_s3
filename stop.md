@@ -1,0 +1,1 @@
+Task 37 is blocked: standalone ZFS probes now pass live, but the application-backed ZFS backup/restore flow cannot be validated here because no AWS credentials or `integration_tests/config/test.env` are available.

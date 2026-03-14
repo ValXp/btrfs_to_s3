@@ -12,6 +12,7 @@ if TESTING_DIR not in sys.path:
     sys.path.insert(0, TESTING_DIR)
 
 from harness.config import load_config
+from harness.filesystem import source_identifiers
 from harness.logs import open_log
 from harness.runner import run_tool
 
@@ -40,15 +41,15 @@ def main() -> int:
         if args.dry_run:
             log.write("dry run: printing command only")
         try:
-            subvolumes = config["btrfs"]["subvolumes"]
-            if not subvolumes:
-                log.write("no subvolumes configured", level="ERROR")
+            sources = source_identifiers(config)
+            if not sources:
+                log.write("no sources configured", level="ERROR")
                 return 1
-            for name in subvolumes:
-                log.write(f"running full backup for subvolume {name}")
+            for name in sources:
+                log.write(f"running full backup for source {name}")
                 result = run_tool(
                     config_path,
-                    ["backup", "--subvolume", name],
+                    ["backup", "--source", name],
                     dry_run=args.dry_run,
                 )
                 if result:

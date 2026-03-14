@@ -75,3 +75,4 @@
 - 2026-03-13 21:57 MDT: Completed Task 34 backend-aware manifest and state schema; commit "Make manifest and state schema backend aware".
 - 2026-03-13 22:02 MDT: Completed Task 35 ZFS-aware unit and harness test coverage; commit "Backfill backend-aware coverage gaps".
 - 2026-03-13 22:10 MDT: Completed Task 36 documentation and example config updates; commit "Update backend-aware documentation".
+- 2026-03-13 22:27 MDT: Blocked on Task 37 live ZFS application validation; fixed live ZFS harness issues, `python3 -m pytest` passes, and the standalone ZFS probes succeed on this host, but the application-backed flow cannot complete because this environment has no AWS credentials or `integration_tests/config/test.env`. Commit "Fix ZFS live harness blockers".

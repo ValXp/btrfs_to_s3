@@ -49,7 +49,7 @@ def main() -> int:
 
 def _run_probe(zfs_cfg: dict[str, object], log) -> None:
     source_dataset = support.source_dataset(zfs_cfg)
-    receive_dataset = support.receive_dataset(zfs_cfg, source_dataset)
+    receive_dataset = f"{support.receive_dataset(zfs_cfg, source_dataset)}-incremental"
     prefix = zfs_cfg["snapshot_prefix"]
 
     base_snapshot = support.snapshot_name(source_dataset, prefix, "base")

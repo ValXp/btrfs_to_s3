@@ -11,6 +11,7 @@ if TESTING_DIR not in sys.path:
     sys.path.insert(0, TESTING_DIR)
 
 from harness.config import load_config
+from harness.filesystem import source_specs
 from harness.logs import open_log
 
 
@@ -21,7 +22,7 @@ MUTATION_PATCH_SIZE = 4096
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Mutate seeded Btrfs data.")
+    parser = argparse.ArgumentParser(description="Mutate seeded harness data.")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument(
         "--dataset-size-mib",
@@ -34,8 +35,7 @@ def main() -> int:
     config_path = os.path.abspath(args.config)
     config = load_config(config_path)
     paths = config["paths"]
-    subvolumes = config["btrfs"]["subvolumes"]
-    mount_dir = paths["mount_dir"]
+    sources = source_specs(config)
     dataset_size_mib = _resolve_dataset_size_mib(args.dataset_size_mib, config)
     dataset_size_bytes = dataset_size_mib * 1024 * 1024
 
@@ -47,18 +47,21 @@ def main() -> int:
         log.write(f"loading config from {config_path}")
         if dataset_size_mib:
             log.write(f"dataset size override: {dataset_size_mib} MiB")
-        for name in subvolumes:
-            subvol_path = os.path.join(mount_dir, name)
+        for source in sources:
             try:
-                subvol_path = _ensure_under_root(paths["run_dir"], subvol_path)
+                source_path = _ensure_under_root(paths["run_dir"], source.path)
             except ValueError as exc:
                 log.write(str(exc), level="ERROR")
                 return 1
-            if not os.path.isdir(subvol_path):
-                log.write(f"missing subvolume {subvol_path}", level="ERROR")
+            if not os.path.isdir(source_path):
+                log.write(f"missing source path {source_path}", level="ERROR")
                 return 1
-            changes = _mutate_subvolume(subvol_path, name, dataset_size_bytes)
-            log.write(f"mutated {name}: {changes}")
+            changes = _mutate_subvolume(
+                source_path,
+                source.identifier,
+                dataset_size_bytes,
+            )
+            log.write(f"mutated {source.identifier}: {changes}")
 
     return 0
 

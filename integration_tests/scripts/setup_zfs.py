@@ -107,6 +107,9 @@ def main() -> int:
                 ],
                 log,
             )
+        except subprocess.CalledProcessError as exc:
+            log.write(f"setup failed: {_format_error(exc)}", level="ERROR")
+            return 1
         except Exception as exc:
             log.write(f"setup failed: {exc}", level="ERROR")
             return 1
@@ -198,6 +201,13 @@ def _stderr_contains(
 ) -> bool:
     stderr = (exc.stderr or "").lower()
     return any(marker in stderr for marker in markers)
+
+
+def _format_error(exc: subprocess.CalledProcessError) -> str:
+    stderr = (exc.stderr or "").strip()
+    if stderr:
+        return stderr
+    return str(exc)
 
 
 def _chown_for_user(paths: list[str], log) -> None:
