@@ -466,6 +466,20 @@ class BtrfsRestoreOperationsTests(unittest.TestCase):
                 operations.verify_metadata(Path(target_dir))
         self.assertIn("valid UUID", str(context.exception))
 
+    def test_resolve_verify_source_returns_snapshot_path(self) -> None:
+        operations = BtrfsRestoreOperations(runner=mock.Mock())
+
+        resolved = operations.resolve_verify_source(
+            "data",
+            "~/snapshots/data__20260101T000000Z__full",
+            None,
+        )
+
+        self.assertEqual(
+            resolved,
+            Path("~/snapshots/data__20260101T000000Z__full").expanduser(),
+        )
+
     def test_finalize_restore_surfaces_stderr(self) -> None:
         def runner(*args, **kwargs):
             raise subprocess.CalledProcessError(

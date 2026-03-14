@@ -415,6 +415,7 @@
     path used by the ZFS harness orchestration.
 
 ### Task 40: ZFS restore content verification source resolution
+- Status: completed 2026-03-14 09:07 MDT by commit "Resolve ZFS restore verification sources".
 - Scope: `btrfs_to_s3/orchestrator.py`, `btrfs_to_s3/filesystems/`,
   `btrfs_to_s3/restore.py`, `btrfs_to_s3/config.py` if needed, and restore/orchestrator tests.
 - Context: ZFS manifests intentionally do not rely on `snapshot.path`, but the

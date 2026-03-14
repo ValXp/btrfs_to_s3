@@ -595,6 +595,7 @@ class RestoreOrchestrator:
         if (
             self._verify_restore(
                 verify_mode,
+                request.source_name,
                 manifests,
                 request.target,
                 backend.restore_operations,
@@ -640,6 +641,7 @@ class RestoreOrchestrator:
     def _verify_restore(
         self,
         verify_mode: str,
+        source_name: str,
         manifests,
         target_path: Path,
         restore_operations,
@@ -647,13 +649,23 @@ class RestoreOrchestrator:
         if verify_mode == "none":
             self.logger.info("event=restore_verify_skipped mode=none")
             return 0
-        snapshot_path = manifests[-1].snapshot_path if manifests else None
-        source_path = Path(snapshot_path).expanduser() if snapshot_path else None
-        if source_path is None or not source_path.exists():
+        source_path = self._resolve_verify_source(
+            source_name,
+            manifests,
+            restore_operations,
+        )
+        if source_path is None:
             self.logger.info(
-                "event=restore_verify_source_missing path=%s",
-                snapshot_path or "unknown",
+                "event=restore_verify_metadata_only reason=source_unresolvable source=%s snapshot=%s",
+                source_name,
+                manifests[-1].snapshot_reference if manifests else "unknown",
             )
+        elif not source_path.exists():
+            self.logger.info(
+                "event=restore_verify_metadata_only reason=source_missing path=%s",
+                source_path,
+            )
+            source_path = None
         try:
             verify_restore(
                 source_path,
@@ -669,6 +681,21 @@ class RestoreOrchestrator:
             "event=restore_verify_complete status=ok mode=%s", verify_mode
         )
         return 0
+
+    def _resolve_verify_source(
+        self,
+        source_name: str,
+        manifests,
+        restore_operations,
+    ) -> Path | None:
+        if not manifests:
+            return None
+        manifest = manifests[-1]
+        return restore_operations.resolve_verify_source(
+            source_name,
+            manifest.snapshot_path,
+            manifest.snapshot_identity,
+        )
 
 
 class _ShellRunner:

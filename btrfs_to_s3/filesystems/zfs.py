@@ -188,11 +188,15 @@ class ZFSRestoreOperations(RestoreOperations):
         *,
         receive_parent_dataset: str,
         restore_base_dir: Path,
+        pool_name: str | None = None,
+        mount_root: Path | None = None,
         popen: Callable[..., subprocess.Popen[bytes]] | None = None,
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     ) -> None:
         self.receive_parent_dataset = receive_parent_dataset
         self.restore_base_dir = restore_base_dir
+        self.pool_name = pool_name
+        self.mount_root = mount_root
         self._popen = popen or subprocess.Popen
         self._runner = runner or subprocess.run
         self._active_receives: dict[int, _ReceiveContext] = {}
@@ -294,6 +298,29 @@ class ZFSRestoreOperations(RestoreOperations):
             raise RestoreBackendError(
                 f"restore target is readonly: {target}"
             )
+
+    def resolve_verify_source(
+        self,
+        source_name: str,
+        snapshot_path: str | None,
+        snapshot_identity: str | None,
+    ) -> Path | None:
+        del source_name
+        del snapshot_path
+        if self.pool_name is None or self.mount_root is None:
+            return None
+        dataset_snapshot = _split_snapshot_identity(snapshot_identity)
+        if dataset_snapshot is None:
+            return None
+        dataset, snapshot_name_value = dataset_snapshot
+        mount_path = _dataset_mount_path(
+            self.mount_root,
+            self.pool_name,
+            dataset,
+        )
+        if mount_path is None:
+            return None
+        return mount_path / ".zfs" / "snapshot" / snapshot_name_value
 
     def _cleanup_failed_dataset(self, context: _ReceiveContext | None) -> str:
         if context is None:
@@ -400,6 +427,30 @@ def _parse_snapshot_identity(
         return None
     _source_name, created_at, kind = parsed
     return snapshot_value, created_at, kind
+
+
+def _split_snapshot_identity(
+    identity: str | None,
+) -> tuple[str, str] | None:
+    if not identity or "@" not in identity:
+        return None
+    dataset, snapshot_name_value = identity.rsplit("@", 1)
+    if not dataset or not snapshot_name_value:
+        return None
+    return dataset, snapshot_name_value
+
+
+def _dataset_mount_path(
+    mount_root: Path,
+    pool_name: str,
+    dataset: str,
+) -> Path | None:
+    if dataset == pool_name:
+        return mount_root
+    prefix = f"{pool_name}/"
+    if not dataset.startswith(prefix):
+        return None
+    return mount_root / dataset[len(prefix) :]
 
 
 def _decode_stderr(stderr: bytes) -> str:

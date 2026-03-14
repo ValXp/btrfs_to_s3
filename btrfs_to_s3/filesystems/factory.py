@@ -99,6 +99,8 @@ def create_filesystem_backend(
             or ZFSRestoreOperations(
                 receive_parent_dataset=receive_parent_dataset,
                 restore_base_dir=config.restore.target_base_dir,
+                pool_name=pool_name,
+                mount_root=config.zfs.mount_root,
             ),
         )
     raise BackendSelectionError(

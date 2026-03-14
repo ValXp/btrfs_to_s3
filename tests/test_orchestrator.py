@@ -153,6 +153,7 @@ def _make_backend(
         send_operations = mock.Mock()
     if restore_operations is None:
         restore_operations = mock.Mock()
+        restore_operations.resolve_verify_source.return_value = None
     return FilesystemBackend(
         name=name,
         sources=tuple(
@@ -940,9 +941,14 @@ class OrchestratorRestoreTests(unittest.TestCase):
                         self.assertEqual(
                             orchestrator._verify_restore(
                                 "full",
+                                "data",
                                 [manifest],
                                 Path(temp_dir),
-                                mock.Mock(),
+                                mock.Mock(
+                                    resolve_verify_source=mock.Mock(
+                                        return_value=None
+                                    )
+                                ),
                             ),
                             1,
                         )
@@ -956,7 +962,7 @@ class OrchestratorRestoreTests(unittest.TestCase):
                 "btrfs_to_s3.orchestrator_test", level="INFO"
             ) as logs:
                 result = orchestrator._verify_restore(
-                    "none", [], Path(temp_dir), mock.Mock()
+                    "none", "data", [], Path(temp_dir), mock.Mock()
                 )
             self.assertEqual(result, 0)
             self.assertTrue(
@@ -980,6 +986,10 @@ class OrchestratorRestoreTests(unittest.TestCase):
                 s3={},
                 snapshot_path=str(Path(temp_dir) / "missing"),
             )
+            restore_operations = mock.Mock()
+            restore_operations.resolve_verify_source.return_value = Path(
+                temp_dir
+            ) / "missing"
             with mock.patch(
                 "btrfs_to_s3.orchestrator.verify_restore"
             ) as verify, self.assertLogs(
@@ -987,15 +997,119 @@ class OrchestratorRestoreTests(unittest.TestCase):
             ) as logs:
                 result = orchestrator._verify_restore(
                     "full",
+                    "data",
                     [manifest],
                     Path(temp_dir),
-                    mock.Mock(),
+                    restore_operations,
                 )
             self.assertEqual(result, 0)
             verify.assert_called_once()
             self.assertTrue(
                 any(
-                    "event=restore_verify_source_missing" in entry
+                    "event=restore_verify_metadata_only reason=source_missing"
+                    in entry
+                    for entry in logs.output
+                )
+            )
+
+    def test_verify_restore_uses_backend_source_resolution_for_zfs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_zfs_config(temp_dir)
+            orchestrator = RestoreOrchestrator(
+                config, logger=logging.getLogger("btrfs_to_s3.orchestrator_test")
+            )
+            source_path = Path(temp_dir) / "source"
+            source_path.mkdir()
+            manifest = ManifestInfo(
+                key="key",
+                kind="full",
+                parent_manifest=None,
+                chunks=(),
+                s3={},
+                snapshot_path=None,
+                filesystem="zfs",
+                snapshot_identity=(
+                    "tank/data@btrfs-to-s3-"
+                    "tank_x2f_data__20260101T000000Z__full"
+                ),
+            )
+            restore_operations = mock.Mock()
+            restore_operations.resolve_verify_source.return_value = source_path
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.verify_restore"
+            ) as verify:
+                result = orchestrator._verify_restore(
+                    "full",
+                    "tank/data",
+                    [manifest],
+                    Path(temp_dir) / "restore",
+                    restore_operations,
+                )
+
+            self.assertEqual(result, 0)
+            restore_operations.resolve_verify_source.assert_called_once_with(
+                "tank/data",
+                None,
+                "tank/data@btrfs-to-s3-"
+                "tank_x2f_data__20260101T000000Z__full",
+            )
+            verify.assert_called_once_with(
+                source_path,
+                Path(temp_dir) / "restore",
+                mode="full",
+                sample_max_files=100,
+                restore_operations=restore_operations,
+            )
+
+    def test_verify_restore_logs_metadata_only_when_source_is_unresolvable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_zfs_config(temp_dir)
+            orchestrator = RestoreOrchestrator(
+                config, logger=logging.getLogger("btrfs_to_s3.orchestrator_test")
+            )
+            manifest = ManifestInfo(
+                key="key",
+                kind="full",
+                parent_manifest=None,
+                chunks=(),
+                s3={},
+                snapshot_path=None,
+                filesystem="zfs",
+                snapshot_identity=(
+                    "tank/data@btrfs-to-s3-"
+                    "tank_x2f_data__20260101T000000Z__full"
+                ),
+            )
+            restore_operations = mock.Mock()
+            restore_operations.resolve_verify_source.return_value = None
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.verify_restore"
+            ) as verify, self.assertLogs(
+                "btrfs_to_s3.orchestrator_test", level="INFO"
+            ) as logs:
+                result = orchestrator._verify_restore(
+                    "full",
+                    "tank/data",
+                    [manifest],
+                    Path(temp_dir),
+                    restore_operations,
+                )
+
+            self.assertEqual(result, 0)
+            verify.assert_called_once_with(
+                None,
+                Path(temp_dir),
+                mode="full",
+                sample_max_files=100,
+                restore_operations=restore_operations,
+            )
+            self.assertTrue(
+                any(
+                    "event=restore_verify_metadata_only"
+                    in entry
+                    and "reason=source_unresolvable" in entry
                     for entry in logs.output
                 )
             )

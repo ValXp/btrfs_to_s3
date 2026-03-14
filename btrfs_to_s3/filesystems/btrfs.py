@@ -226,6 +226,18 @@ class BtrfsRestoreOperations(RestoreOperations):
         if _parse_uuid(result.stdout) is None:
             raise RestoreBackendError("restore target has no valid UUID")
 
+    def resolve_verify_source(
+        self,
+        source_name: str,
+        snapshot_path: str | None,
+        snapshot_identity: str | None,
+    ) -> Path | None:
+        del source_name
+        del snapshot_identity
+        if not snapshot_path:
+            return None
+        return Path(snapshot_path).expanduser()
+
     def _delete_subvolume(self, path: Path) -> None:
         self._run(["btrfs", "subvolume", "delete", str(path)])
 

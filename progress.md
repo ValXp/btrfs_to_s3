@@ -80,3 +80,4 @@
 - 2026-03-14 08:36 MDT: Created ignored `integration_tests/config/test.env` from `/root/btrfs_to_s3_s3.secrets`, verified boto3 resolves env credentials locally, and confirmed the keys with `aws sts get-caller-identity` for `arn:aws:iam::022683771292:user/btrfs_to_s3`.
 - 2026-03-14 08:52 MDT: Completed Task 38 application-backed ZFS harness scripts; commit "Cover ZFS application harness scripts".
 - 2026-03-14 09:00 MDT: Completed Task 39 route `run_all.py` through the ZFS application flow; commit "Route ZFS harness through application flow".
+- 2026-03-14 09:07 MDT: Completed Task 40 ZFS restore content verification source resolution; commit "Resolve ZFS restore verification sources".

@@ -480,6 +480,29 @@ class ZFSRestoreOperationsTests(unittest.TestCase):
 
         self.assertIn("dataset does not exist", str(context.exception))
 
+    def test_resolve_verify_source_uses_snapshot_mount_path(self) -> None:
+        operations = ZFSRestoreOperations(
+            receive_parent_dataset="tank/restore",
+            restore_base_dir=Path("/tank/restore"),
+            pool_name="tank",
+            mount_root=Path("/tank"),
+            runner=mock.Mock(),
+        )
+
+        resolved = operations.resolve_verify_source(
+            "tank/data",
+            None,
+            "tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__full",
+        )
+
+        self.assertEqual(
+            resolved,
+            Path(
+                "/tank/data/.zfs/snapshot/"
+                "btrfs-to-s3-tank_x2f_data__20260101T000000Z__full"
+            ),
+        )
+
 
 class CreateFilesystemBackendTests(unittest.TestCase):
     def test_create_zfs_backend_builds_sources_and_operations(self) -> None:

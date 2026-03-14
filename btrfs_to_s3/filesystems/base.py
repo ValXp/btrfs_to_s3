@@ -117,6 +117,14 @@ class RestoreOperations(Protocol):
     def verify_metadata(self, target: Path) -> None:
         """Verify backend-specific metadata on the restored target."""
 
+    def resolve_verify_source(
+        self,
+        source_name: str,
+        snapshot_path: str | None,
+        snapshot_identity: str | None,
+    ) -> Path | None:
+        """Resolve a local content-verification source when one is accessible."""
+
 
 def snapshot_name(subvolume_name: str, created_at: datetime, kind: str) -> str:
     if created_at.tzinfo is None:
