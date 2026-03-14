@@ -119,6 +119,7 @@
   - No test in this task requires a live ZFS host.
 
 ### Task 28: Backend-aware harness runner and orchestration
+- Status: completed 2026-03-13 20:55 MDT by commit "Make harness orchestration backend aware".
 - Scope: `integration_tests/harness/runner.py`,
   `integration_tests/scripts/run_all.py`, related harness tests, and any needed
   updates to `integration_tests/README.md`.
