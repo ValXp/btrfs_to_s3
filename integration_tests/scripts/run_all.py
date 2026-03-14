@@ -140,6 +140,9 @@ def _build_steps(
                     ("mutate", "mutate_data.py", []),
                     ("incremental", "run_incremental.py", ["--skip-mutate"]),
                     ("interrupt", "run_interrupt.py", []),
+                    ("verify_manifest", "verify_manifest.py", []),
+                    ("verify_s3", "verify_s3.py", []),
+                    ("verify_retention", "verify_retention.py", []),
                     ("restore", "run_restore.py", ["--source", "all"]),
                     ("verify_restore", "verify_restore.py", ["--source", "all"]),
                 ]

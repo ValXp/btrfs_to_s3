@@ -12,6 +12,7 @@ if TESTING_DIR not in sys.path:
 
 from harness.aws import create_s3_client, read_object
 from harness.config import load_config
+from harness.filesystem import source_identifiers
 from harness.logs import open_log
 from harness import manifest as manifest_lib
 
@@ -67,9 +68,8 @@ def main() -> int:
         if prefix and not prefix.endswith("/"):
             prefix = f"{prefix}/"
         s3_schema = manifest_lib.load_schema(s3_schema_path)
-        subvolumes = config["btrfs"]["subvolumes"]
-        for subvolume in subvolumes:
-            current_key = f"{prefix}subvol/{subvolume}/current.json"
+        for source in source_identifiers(config):
+            current_key = f"{prefix}subvol/{source}/current.json"
             log.write(f"fetching current pointer {current_key}")
             try:
                 current_payload = read_object(
