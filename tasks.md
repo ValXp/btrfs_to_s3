@@ -282,6 +282,7 @@
   - Tests cover new manifest/state fields and backward compatibility.
 
 ### Task 35: ZFS-aware unit and harness test coverage
+- Status: completed 2026-03-13 22:02 MDT by commit "Backfill backend-aware coverage gaps".
 - Scope: tests under `tests/`, harness tests under `integration_tests/` if you
   add them, and any fixture/test helpers needed for the new backend model.
 - Context: Tasks 24-34 introduce new config shapes, backend seams, and a ZFS

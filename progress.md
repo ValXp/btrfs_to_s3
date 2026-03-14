@@ -73,3 +73,4 @@
 - 2026-03-13 21:35 MDT: Completed Task 32 orchestrator and restore flow backend selection; commit "Select filesystem backend in orchestrators".
 - 2026-03-13 21:47 MDT: Completed Task 33 ZFS application backend implementation; commit "Add ZFS application backend".
 - 2026-03-13 21:57 MDT: Completed Task 34 backend-aware manifest and state schema; commit "Make manifest and state schema backend aware".
+- 2026-03-13 22:02 MDT: Completed Task 35 ZFS-aware unit and harness test coverage; commit "Backfill backend-aware coverage gaps".

@@ -10,6 +10,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+from btrfs_to_s3.config import (
+    Config,
+    GlobalConfig,
+    RestoreConfig,
+    S3Config,
+    ScheduleConfig,
+    SnapshotsConfig,
+    SubvolumesConfig,
+)
 from btrfs_to_s3.filesystems.base import (
     ReceiveStream,
     RestoreBackendError,
@@ -21,6 +30,7 @@ from btrfs_to_s3.filesystems.btrfs import (
     BtrfsSendOperations,
     BtrfsSnapshotManager,
 )
+from btrfs_to_s3.filesystems.factory import create_filesystem_backend
 
 
 class RecordingRunner:
@@ -469,6 +479,65 @@ class BtrfsRestoreOperationsTests(unittest.TestCase):
         with self.assertRaises(RestoreBackendError) as context:
             operations.finalize_restore(Path("/tmp/target"))
         self.assertIn("property set failed", str(context.exception))
+
+
+class CreateFilesystemBackendTests(unittest.TestCase):
+    def test_create_btrfs_backend_preserves_legacy_source_names(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            snapshots_dir = Path(temp_dir) / "snapshots"
+            data_path = Path(temp_dir) / "data"
+            root_path = Path(temp_dir) / "root"
+            config = Config(
+                global_cfg=GlobalConfig(
+                    log_level="info",
+                    state_path=Path(temp_dir) / "state.json",
+                    lock_path=Path(temp_dir) / "lock",
+                    spool_dir=Path(temp_dir) / "spool",
+                    spool_size_bytes=1024,
+                ),
+                schedule=ScheduleConfig(
+                    full_every_days=180,
+                    incremental_every_days=7,
+                    run_at="02:00",
+                ),
+                snapshots=SnapshotsConfig(base_dir=snapshots_dir, retain=2),
+                subvolumes=SubvolumesConfig(paths=(data_path, root_path)),
+                s3=S3Config(
+                    bucket="bucket",
+                    region="us-east-1",
+                    prefix="backup/data",
+                    chunk_size_bytes=2048,
+                    storage_class_chunks="STANDARD",
+                    storage_class_manifest="STANDARD",
+                    concurrency=1,
+                    spool_enabled=False,
+                    sse="AES256",
+                ),
+                restore=RestoreConfig(
+                    target_base_dir=Path(temp_dir) / "restore",
+                    verify_mode="full",
+                    sample_max_files=100,
+                    wait_for_restore=True,
+                    restore_timeout_seconds=3600,
+                    restore_tier="Standard",
+                ),
+            )
+
+            backend = create_filesystem_backend(config, runner=RecordingRunner())
+
+        self.assertEqual(backend.name, "btrfs")
+        self.assertEqual(
+            tuple(source.identifier for source in backend.sources),
+            ("data", "root"),
+        )
+        self.assertEqual(
+            tuple(source.path for source in backend.sources),
+            (data_path, root_path),
+        )
+        self.assertIsInstance(backend.snapshot_operations, BtrfsSnapshotManager)
+        self.assertEqual(backend.snapshot_operations.base_dir, snapshots_dir)
+        self.assertIsInstance(backend.send_operations, BtrfsSendOperations)
+        self.assertIsInstance(backend.restore_operations, BtrfsRestoreOperations)
 
 
 if __name__ == "__main__":
