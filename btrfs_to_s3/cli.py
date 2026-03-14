@@ -146,6 +146,8 @@ def _load_and_override_config(args: argparse.Namespace) -> Config:
             subvolumes=config.subvolumes,
             s3=config.s3,
             restore=config.restore,
+            filesystem=config.filesystem,
+            zfs=config.zfs,
         )
         validate_config(config)
     return config

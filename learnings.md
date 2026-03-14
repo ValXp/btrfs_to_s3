@@ -41,3 +41,5 @@ Learnings
 - FYI: `integration_tests/scripts/setup_zfs.py` writes `zfs_pool_state.json` immediately after pool create/import so `teardown_zfs.py` can clean up partial setup failures.
 - FYI: the standalone ZFS retention probe needs `retention_snapshots + 1` snapshots so the configured policy prunes a parent snapshot while still leaving a latest snapshot to test incremental-send failure.
 - FYI: `integration_tests/scripts/run_all.py` now switches to the standalone ZFS probe flow when `[filesystem].backend = "zfs"`; `--skip-s3` has no effect there and `--include-large` is still Btrfs-only.
+- FYI: application configs also default missing `[filesystem]` to legacy Btrfs; ZFS configs require `[filesystem].backend = "zfs"` and can omit `snapshots.base_dir` and `subvolumes.paths` in favor of a `[zfs]` section.
+- FYI: any code that rebuilds a `Config` instance must preserve `filesystem` and `zfs` fields, or a loaded ZFS config silently falls back to the default Btrfs backend.

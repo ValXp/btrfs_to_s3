@@ -625,6 +625,8 @@ def _build_plan(
             subvolumes=type(config.subvolumes)(paths=tuple(selected)),
             s3=config.s3,
             restore=config.restore,
+            filesystem=config.filesystem,
+            zfs=config.zfs,
         )
     return plan_backups(
         plan_config, state, now, available_snapshots=available_snapshots

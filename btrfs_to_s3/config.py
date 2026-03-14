@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,8 @@ DEFAULT_RESTORE_SAMPLE_MAX_FILES = 1000
 DEFAULT_RESTORE_WAIT_FOR_RESTORE = True
 DEFAULT_RESTORE_TIMEOUT_SECONDS = 72 * 60 * 60
 DEFAULT_RESTORE_TIER = "Standard"
+DEFAULT_FILESYSTEM_BACKEND = "btrfs"
+VALID_FILESYSTEM_BACKENDS = frozenset({"btrfs", "zfs"})
 
 
 class ConfigError(ValueError):
@@ -59,13 +61,27 @@ class ScheduleConfig:
 
 @dataclass(frozen=True)
 class SnapshotsConfig:
-    base_dir: Path
+    base_dir: Path | None
     retain: int
 
 
 @dataclass(frozen=True)
 class SubvolumesConfig:
     paths: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class FilesystemConfig:
+    backend: str
+
+
+@dataclass(frozen=True)
+class ZFSConfig:
+    pool_name: str
+    mount_root: Path
+    source_datasets: tuple[str, ...]
+    receive_parent_dataset: str
+    snapshot_prefix: str
 
 
 @dataclass(frozen=True)
@@ -99,15 +115,38 @@ class Config:
     subvolumes: SubvolumesConfig
     s3: S3Config
     restore: RestoreConfig
+    filesystem: FilesystemConfig = field(
+        default_factory=lambda: FilesystemConfig(
+            backend=DEFAULT_FILESYSTEM_BACKEND
+        )
+    )
+    zfs: ZFSConfig | None = None
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "Config":
+        filesystem = FilesystemConfig(
+            backend=_load_backend(data.get("filesystem"))
+        )
         global_data = data.get("global", {})
         schedule_data = data.get("schedule", {})
         snapshots_data = data.get("snapshots", {})
         subvolumes_data = data.get("subvolumes", {})
         s3_data = data.get("s3", {})
         restore_data = data.get("restore", {})
+        zfs_data = data.get("zfs")
+
+        if not isinstance(global_data, dict):
+            raise ConfigError("global must be a table")
+        if not isinstance(schedule_data, dict):
+            raise ConfigError("schedule must be a table")
+        if not isinstance(snapshots_data, dict):
+            raise ConfigError("snapshots must be a table")
+        if not isinstance(subvolumes_data, dict):
+            raise ConfigError("subvolumes must be a table")
+        if not isinstance(s3_data, dict):
+            raise ConfigError("s3 must be a table")
+        if not isinstance(restore_data, dict):
+            raise ConfigError("restore must be a table")
 
         global_cfg = GlobalConfig(
             log_level=str(global_data.get("log_level", DEFAULT_LOG_LEVEL)),
@@ -132,14 +171,12 @@ class Config:
             run_at=str(schedule_data.get("run_at", DEFAULT_RUN_AT)),
         )
         snapshots = SnapshotsConfig(
-            base_dir=_expand_path(
-                snapshots_data.get("base_dir", DEFAULT_SNAPSHOT_BASE_DIR)
+            base_dir=_load_snapshot_base_dir(
+                snapshots_data, filesystem.backend
             ),
             retain=int(snapshots_data.get("retain", DEFAULT_SNAPSHOT_RETAIN)),
         )
-        subvolume_paths = tuple(
-            _expand_path(path) for path in subvolumes_data.get("paths", [])
-        )
+        subvolume_paths = _load_subvolume_paths(subvolumes_data)
         s3 = S3Config(
             bucket=str(s3_data.get("bucket", "")),
             region=str(s3_data.get("region", "")),
@@ -194,6 +231,8 @@ class Config:
             subvolumes=SubvolumesConfig(paths=subvolume_paths),
             s3=s3,
             restore=restore,
+            filesystem=filesystem,
+            zfs=_load_zfs_config(zfs_data, filesystem.backend),
         )
         validate_config(config)
         return config
@@ -225,14 +264,29 @@ def validate_config(config: Config) -> None:
     )
     _validate_run_at(config.schedule.run_at)
 
-    _validate_path(config.snapshots.base_dir, "snapshots.base_dir")
+    _validate_backend(config.filesystem.backend)
+    if config.snapshots.base_dir is not None:
+        _validate_path(config.snapshots.base_dir, "snapshots.base_dir")
     if config.snapshots.retain < 1:
         raise ConfigError("snapshots.retain must be >= 1")
 
-    if not config.subvolumes.paths:
-        raise ConfigError("subvolumes.paths must include at least one path")
-    for path in config.subvolumes.paths:
-        _validate_path(path, "subvolumes.paths")
+    if config.filesystem.backend == "btrfs":
+        if config.snapshots.base_dir is None:
+            raise ConfigError(
+                'snapshots.base_dir is required when filesystem.backend = "btrfs"'
+            )
+        if not config.subvolumes.paths:
+            raise ConfigError(
+                'subvolumes.paths must include at least one path when filesystem.backend = "btrfs"'
+            )
+        for path in config.subvolumes.paths:
+            _validate_path(path, "subvolumes.paths")
+    elif config.zfs is None:
+        raise ConfigError(
+            'zfs section is required when filesystem.backend = "zfs"'
+        )
+    else:
+        _validate_zfs_config(config.zfs)
 
     if not config.s3.bucket:
         raise ConfigError("s3.bucket is required")
@@ -269,9 +323,90 @@ def _expand_path(raw: Any) -> Path:
     return Path(str(raw)).expanduser()
 
 
+def _load_backend(raw: Any) -> str:
+    if raw is None:
+        return DEFAULT_FILESYSTEM_BACKEND
+    if not isinstance(raw, dict):
+        raise ConfigError("filesystem must be a table")
+    backend = raw.get("backend")
+    if not isinstance(backend, str) or not backend:
+        raise ConfigError("filesystem.backend is required")
+    return backend
+
+
+def _load_snapshot_base_dir(
+    snapshots_data: dict[str, Any],
+    backend: str,
+) -> Path | None:
+    if "base_dir" in snapshots_data:
+        return _expand_path(snapshots_data["base_dir"])
+    if backend == "zfs":
+        return None
+    return _expand_path(DEFAULT_SNAPSHOT_BASE_DIR)
+
+
+def _load_subvolume_paths(
+    subvolumes_data: dict[str, Any],
+) -> tuple[Path, ...]:
+    raw_paths = subvolumes_data.get("paths", [])
+    if raw_paths is None:
+        return ()
+    if not isinstance(raw_paths, list):
+        raise ConfigError("subvolumes.paths must be a list of paths")
+    return tuple(_expand_path(path) for path in raw_paths)
+
+
+def _load_zfs_config(raw: Any, backend: str) -> ZFSConfig | None:
+    if backend != "zfs":
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            'zfs section is required when filesystem.backend = "zfs"'
+        )
+    mount_root = raw.get("mount_root")
+    source_datasets = raw.get("source_datasets")
+    if not isinstance(source_datasets, list):
+        raise ConfigError("zfs.source_datasets must be a list of dataset names")
+    normalized_sources = []
+    for dataset in source_datasets:
+        if not isinstance(dataset, str) or not dataset:
+            raise ConfigError(
+                "zfs.source_datasets must be a list of dataset names"
+            )
+        normalized_sources.append(dataset)
+    return ZFSConfig(
+        pool_name=_require_non_empty_string(raw.get("pool_name"), "zfs.pool_name"),
+        mount_root=_expand_path(
+            _require_non_empty_string(mount_root, "zfs.mount_root")
+        ),
+        source_datasets=tuple(normalized_sources),
+        receive_parent_dataset=_require_non_empty_string(
+            raw.get("receive_parent_dataset"),
+            "zfs.receive_parent_dataset",
+        ),
+        snapshot_prefix=_require_non_empty_string(
+            raw.get("snapshot_prefix"),
+            "zfs.snapshot_prefix",
+        ),
+    )
+
+
+def _require_non_empty_string(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"{field} is required")
+    return value
+
+
 def _validate_path(path: Path, field: str) -> None:
     if not path.is_absolute():
         raise ConfigError(f"{field} must be an absolute path: {path}")
+
+
+def _validate_backend(value: str) -> None:
+    if value not in VALID_FILESYSTEM_BACKENDS:
+        raise ConfigError(
+            f"filesystem.backend must be one of {sorted(VALID_FILESYSTEM_BACKENDS)}; got {value}"
+        )
 
 
 def _validate_positive(value: int, field: str) -> None:
@@ -298,3 +433,15 @@ def _validate_run_at(value: str) -> None:
         raise ConfigError("schedule.run_at must be HH:MM") from exc
     if hour < 0 or hour > 23 or minute < 0 or minute > 59:
         raise ConfigError("schedule.run_at must be HH:MM")
+
+
+def _validate_zfs_config(config: ZFSConfig) -> None:
+    _validate_path(config.mount_root, "zfs.mount_root")
+    if not config.pool_name:
+        raise ConfigError("zfs.pool_name is required")
+    if not config.source_datasets:
+        raise ConfigError("zfs.source_datasets must include at least one dataset")
+    if not config.receive_parent_dataset:
+        raise ConfigError("zfs.receive_parent_dataset is required")
+    if not config.snapshot_prefix:
+        raise ConfigError("zfs.snapshot_prefix is required")

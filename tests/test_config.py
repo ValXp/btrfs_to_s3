@@ -41,6 +41,44 @@ spool_enabled = false
 sse = "AES256"
 """
 
+VALID_ZFS_TOML = """
+[global]
+log_level = "info"
+state_path = "/tmp/btrfs_to_s3/state.json"
+lock_path = "/tmp/btrfs_to_s3/lock"
+spool_dir = "/tmp/btrfs_to_s3/spool"
+spool_size_bytes = 1024
+
+[schedule]
+full_every_days = 180
+incremental_every_days = 7
+run_at = "02:00"
+
+[filesystem]
+backend = "zfs"
+
+[snapshots]
+retain = 2
+
+[zfs]
+pool_name = "tank"
+mount_root = "/tank"
+source_datasets = ["tank/data", "tank/home"]
+receive_parent_dataset = "tank/restore"
+snapshot_prefix = "btrfs-to-s3"
+
+[s3]
+bucket = "bucket-name"
+region = "us-east-1"
+prefix = "backup/data"
+chunk_size_bytes = 2048
+storage_class_chunks = "STANDARD"
+storage_class_manifest = "STANDARD"
+concurrency = 2
+spool_enabled = false
+sse = "AES256"
+"""
+
 
 class ConfigTests(unittest.TestCase):
     def _valid_data(self) -> dict[str, object]:
@@ -83,7 +121,51 @@ class ConfigTests(unittest.TestCase):
             },
         }
 
-    def test_load_valid_config(self) -> None:
+    def _valid_zfs_data(self) -> dict[str, object]:
+        return {
+            "global": {
+                "log_level": "info",
+                "state_path": "/tmp/btrfs_to_s3/state.json",
+                "lock_path": "/tmp/btrfs_to_s3/lock",
+                "spool_dir": "/tmp/btrfs_to_s3/spool",
+                "spool_size_bytes": 1024,
+            },
+            "schedule": {
+                "full_every_days": 180,
+                "incremental_every_days": 7,
+                "run_at": "02:00",
+            },
+            "filesystem": {"backend": "zfs"},
+            "snapshots": {"retain": 2},
+            "zfs": {
+                "pool_name": "tank",
+                "mount_root": "/tank",
+                "source_datasets": ["tank/data", "tank/home"],
+                "receive_parent_dataset": "tank/restore",
+                "snapshot_prefix": "btrfs-to-s3",
+            },
+            "s3": {
+                "bucket": "bucket-name",
+                "region": "us-east-1",
+                "prefix": "backup/data",
+                "chunk_size_bytes": 2048,
+                "storage_class_chunks": "STANDARD",
+                "storage_class_manifest": "STANDARD",
+                "concurrency": 2,
+                "spool_enabled": False,
+                "sse": "AES256",
+            },
+            "restore": {
+                "target_base_dir": "/srv/restore",
+                "verify_mode": "full",
+                "sample_max_files": 1000,
+                "wait_for_restore": True,
+                "restore_timeout_seconds": 3600,
+                "restore_tier": "Standard",
+            },
+        }
+
+    def test_load_valid_legacy_btrfs_config(self) -> None:
         with tempfile.NamedTemporaryFile("w", delete=False) as handle:
             handle.write(VALID_TOML)
             path = Path(handle.name)
@@ -91,6 +173,27 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.s3.bucket, "bucket-name")
         self.assertEqual(config.schedule.run_at, "02:00")
         self.assertEqual(len(config.subvolumes.paths), 2)
+        self.assertEqual(
+            config.filesystem.backend,
+            config_module.DEFAULT_FILESYSTEM_BACKEND,
+        )
+        self.assertIsNone(config.zfs)
+
+    def test_load_valid_zfs_config(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False) as handle:
+            handle.write(VALID_ZFS_TOML)
+            path = Path(handle.name)
+        config = config_module.load_config(path)
+        self.assertEqual(config.filesystem.backend, "zfs")
+        self.assertIsNotNone(config.zfs)
+        assert config.zfs is not None
+        self.assertEqual(config.zfs.pool_name, "tank")
+        self.assertEqual(
+            config.zfs.source_datasets,
+            ("tank/data", "tank/home"),
+        )
+        self.assertIsNone(config.snapshots.base_dir)
+        self.assertEqual(config.subvolumes.paths, ())
 
     def test_rejects_relative_paths(self) -> None:
         toml = VALID_TOML.replace("/tmp/btrfs_to_s3/state.json", "state.json")
@@ -154,6 +257,19 @@ class ConfigTests(unittest.TestCase):
             config.restore.verify_mode, config_module.DEFAULT_RESTORE_VERIFY_MODE
         )
         self.assertTrue(config.global_cfg.state_path.is_absolute())
+        self.assertEqual(
+            config.filesystem.backend,
+            config_module.DEFAULT_FILESYSTEM_BACKEND,
+        )
+
+    def test_from_dict_loads_zfs_backend(self) -> None:
+        config = config_module.Config.from_dict(self._valid_zfs_data())
+        self.assertEqual(config.filesystem.backend, "zfs")
+        self.assertIsNotNone(config.zfs)
+        assert config.zfs is not None
+        self.assertEqual(config.zfs.mount_root, Path("/tank"))
+        self.assertEqual(config.snapshots.retain, 2)
+        self.assertIsNone(config.snapshots.base_dir)
 
     def test_rejects_invalid_log_level(self) -> None:
         data = self._valid_data()
@@ -171,6 +287,42 @@ class ConfigTests(unittest.TestCase):
         data = self._valid_data()
         data["subvolumes"]["paths"] = []
         with self.assertRaises(config_module.ConfigError):
+            config_module.Config.from_dict(data)
+
+    def test_rejects_invalid_backend_name(self) -> None:
+        data = self._valid_data()
+        data["filesystem"] = {"backend": "xfs"}
+        with self.assertRaisesRegex(
+            config_module.ConfigError,
+            r"filesystem\.backend",
+        ):
+            config_module.Config.from_dict(data)
+
+    def test_rejects_zfs_without_section(self) -> None:
+        data = self._valid_data()
+        data["filesystem"] = {"backend": "zfs"}
+        with self.assertRaisesRegex(
+            config_module.ConfigError,
+            r'zfs section is required when filesystem\.backend = "zfs"',
+        ):
+            config_module.Config.from_dict(data)
+
+    def test_rejects_zfs_without_source_datasets(self) -> None:
+        data = self._valid_zfs_data()
+        data["zfs"]["source_datasets"] = []
+        with self.assertRaisesRegex(
+            config_module.ConfigError,
+            r"zfs\.source_datasets",
+        ):
+            config_module.Config.from_dict(data)
+
+    def test_rejects_relative_zfs_mount_root(self) -> None:
+        data = self._valid_zfs_data()
+        data["zfs"]["mount_root"] = "tank"
+        with self.assertRaisesRegex(
+            config_module.ConfigError,
+            r"zfs\.mount_root",
+        ):
             config_module.Config.from_dict(data)
 
     def test_rejects_missing_s3_bucket(self) -> None:

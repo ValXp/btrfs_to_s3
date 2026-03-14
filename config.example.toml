@@ -10,12 +10,27 @@ full_every_days = 180
 incremental_every_days = 7
 run_at = "02:00"
 
+[filesystem]
+backend = "btrfs" # btrfs|zfs
+
 [snapshots]
+# Btrfs only: base_dir is where local readonly snapshots are created.
+# ZFS configs may omit base_dir and keep only retain.
 base_dir = "/srv/snapshots"
 retain = 2
 
 [subvolumes]
+# Btrfs only: source subvolume paths on the local host.
 paths = ["/srv/data", "/srv/home"]
+
+# For ZFS, switch [filesystem].backend to "zfs", omit [subvolumes], and use:
+#
+# [zfs]
+# pool_name = "tank"
+# mount_root = "/tank"
+# source_datasets = ["tank/data", "tank/home"]
+# receive_parent_dataset = "tank/restore"
+# snapshot_prefix = "btrfs-to-s3"
 
 [s3]
 bucket = "my-backup-bucket"
