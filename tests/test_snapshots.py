@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+from btrfs_to_s3.filesystems.btrfs import BtrfsSnapshotManager
 from btrfs_to_s3.snapshots import SnapshotManager, snapshot_name
 
 
@@ -19,6 +20,9 @@ class RecordingRunner:
 
 
 class SnapshotTests(unittest.TestCase):
+    def test_snapshot_manager_is_btrfs_compatibility_wrapper(self) -> None:
+        self.assertTrue(issubclass(SnapshotManager, BtrfsSnapshotManager))
+
     def test_snapshot_name_deterministic(self) -> None:
         when = datetime(2026, 1, 1, 2, 3, 4, tzinfo=timezone.utc)
         self.assertEqual(

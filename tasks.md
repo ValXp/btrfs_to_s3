@@ -165,6 +165,7 @@
     ZFS-oriented config loading.
 
 ### Task 30: Filesystem backend interface + Btrfs snapshot/send extraction
+- Status: completed 2026-03-13 21:10 MDT by commit "Extract Btrfs filesystem backend".
 - Scope: new modules under `btrfs_to_s3/filesystems/`, existing
   `btrfs_to_s3/snapshots.py`, `btrfs_to_s3/streamer.py`, and related tests.
 - Context: the application currently shells out to Btrfs directly from
@@ -180,7 +181,7 @@
   duplicated command logic.
 - Acceptance criteria:
   - A new filesystem backend interface exists and is used by the Btrfs
-    implementation.
+  implementation.
   - Raw `btrfs subvolume snapshot`, `btrfs subvolume delete`, and `btrfs send`
     command construction no longer lives in the old generic modules.
   - Existing snapshot/send behavior is preserved for Btrfs.

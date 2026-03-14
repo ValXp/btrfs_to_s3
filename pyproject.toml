@@ -13,7 +13,7 @@ authors = [{name = "btrfs_to_s3 maintainers"}]
 dependencies = ["boto3", "tomli; python_version < '3.11'"]
 
 [tool.setuptools]
-packages = ["btrfs_to_s3"]
+packages = ["btrfs_to_s3", "btrfs_to_s3.filesystems"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"
