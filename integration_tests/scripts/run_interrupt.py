@@ -14,6 +14,7 @@ if TESTING_DIR not in sys.path:
     sys.path.insert(0, TESTING_DIR)
 
 from harness.config import load_config
+from harness.filesystem import backend_name, source_identifiers
 from harness.logs import open_log
 from harness import runner
 from harness.env import load_env
@@ -27,6 +28,16 @@ DEFAULT_CONFIG = os.path.abspath(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Interrupt a backup and rerun.")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
+    parser.add_argument(
+        "--source",
+        "--subvolume",
+        dest="source",
+        default=None,
+        help=(
+            "Source identifier to interrupt. Defaults to the first configured ZFS "
+            "source and to all sources for legacy Btrfs configs."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--sleep", type=int, default=5)
     args = parser.parse_args()
@@ -41,7 +52,15 @@ def main() -> int:
     with open_log(log_path) as log:
         log.write(f"loading config from {config_path}")
         os.environ["BTRFS_TO_S3_BACKUP_TYPE"] = "full"
-        extra_args = ["backup"]
+        try:
+            extra_args = _resolve_backup_args(config, args.source)
+        except ValueError as exc:
+            log.write(str(exc), level="ERROR")
+            return 1
+        if len(extra_args) > 2:
+            log.write(f"interrupting source {extra_args[-1]}")
+        elif backend_name(config) == "zfs":
+            log.write("interrupting all configured ZFS sources")
         if args.dry_run:
             log.write("dry run: printing command only")
             runner.run_tool(config_path, extra_args, dry_run=True)
@@ -95,6 +114,23 @@ def main() -> int:
             return 1
 
     return 0
+
+
+def _resolve_backup_args(config: dict, requested_source: str | None) -> list[str]:
+    sources = source_identifiers(config)
+    if requested_source == "all":
+        return ["backup"]
+    if requested_source is not None:
+        if requested_source not in sources:
+            raise ValueError(
+                f"source {requested_source} not in config list: {', '.join(sources)}"
+            )
+        return ["backup", "--source", requested_source]
+    if backend_name(config) == "zfs":
+        if not sources:
+            raise ValueError("config has no sources")
+        return ["backup", "--source", sources[0]]
+    return ["backup"]
 
 
 def _log_process(log, label: str, result: subprocess.CompletedProcess[str]) -> None:

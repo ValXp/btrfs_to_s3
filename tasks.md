@@ -357,6 +357,7 @@
   - `python3 -m pytest` still passes after the live-validation fixes.
 
 ### Task 38: Application-backed ZFS harness scripts
+- Status: completed 2026-03-14 08:52 MDT by commit "Cover ZFS application harness scripts".
 - Scope: `integration_tests/scripts/`, `integration_tests/harness/runner.py`,
   `integration_tests/README.md`, and tests covering the new script logic.
 - Context: the repo has a ZFS application backend, but the ZFS harness only runs
