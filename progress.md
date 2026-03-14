@@ -64,3 +64,4 @@
 - 2026-01-19 22:34 MST: Completed Task 23 uploader coverage uplift; commit "Increase uploader coverage".
 - 2026-03-13 20:21 MDT: Completed Task 24 harness config schema + ZFS docs groundwork; commit "Add ZFS harness config groundwork".
 - 2026-03-13 20:27 MDT: Completed Task 25 ZFS harness helper module; commit "Add ZFS harness helper module".
+- 2026-03-13 20:36 MDT: Completed Task 26 ZFS setup/teardown fixture scripts; commit "Add ZFS fixture setup and teardown scripts".
