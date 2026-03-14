@@ -42,6 +42,7 @@
     backward compatibility for the current Btrfs config shape.
 
 ### Task 25: ZFS harness helper module
+- Status: completed 2026-03-13 20:27 MDT by commit "Add ZFS harness helper module".
 - Scope: new `integration_tests/harness/zfs.py` plus tests.
 - Context: the repo already has `integration_tests/harness/btrfs.py`, which
   wraps loopback image setup, mount/umount, subvolume creation, and snapshot

@@ -36,3 +36,4 @@ Learnings
 - FYI: Streamer tests mock subprocess.Popen to exercise open_btrfs_send without btrfs.
 - FYI: upload_stream uses threshold = max(multipart_threshold, MIN_PART_SIZE), so multipart coverage needs payloads > 5 MiB.
 - FYI: `integration_tests/harness/config.py` now defaults configs without `[filesystem]` to legacy Btrfs and requires explicit `[filesystem].backend = "zfs"` for ZFS configs.
+- FYI: `integration_tests/harness/zfs.py` rejects pool files and mount roots outside the configured `run_dir`, so disposable ZFS fixtures need to stay under `integration_tests/run/`.

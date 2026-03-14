@@ -63,3 +63,4 @@
 - 2026-01-19 22:31 MST: Completed Task 22 streamer coverage uplift; commit "Increase streamer coverage".
 - 2026-01-19 22:34 MST: Completed Task 23 uploader coverage uplift; commit "Increase uploader coverage".
 - 2026-03-13 20:21 MDT: Completed Task 24 harness config schema + ZFS docs groundwork; commit "Add ZFS harness config groundwork".
+- 2026-03-13 20:27 MDT: Completed Task 25 ZFS harness helper module; commit "Add ZFS harness helper module".
