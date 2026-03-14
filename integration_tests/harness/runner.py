@@ -98,8 +98,8 @@ def _ensure_tool_config(config: dict[str, Any], config_path: str) -> str:
 
 
 def _render_tool_config(config: dict[str, Any]) -> str:
+    backend = config["filesystem"]["backend"]
     paths = config["paths"]
-    btrfs_cfg = config["btrfs"]
     aws_cfg = config["aws"]
     backup_cfg = config["backup"]
     restore_cfg = config.get("restore")
@@ -108,13 +108,8 @@ def _render_tool_config(config: dict[str, Any]) -> str:
 
     run_dir = os.path.abspath(paths["run_dir"])
     lock_dir = os.path.abspath(paths["lock_dir"])
-    snapshots_dir = os.path.abspath(paths["snapshots_dir"])
     scratch_dir = os.path.abspath(paths["scratch_dir"])
-    mount_dir = os.path.abspath(paths["mount_dir"])
 
-    subvolume_paths = [
-        os.path.join(mount_dir, name) for name in btrfs_cfg["subvolumes"]
-    ]
     chunk_size_bytes = int(backup_cfg["chunk_size_mib"]) * 1024 * 1024
     spool_size_bytes = max(2 * chunk_size_bytes, 64 * 1024 * 1024)
     if isinstance(global_cfg, dict) and "spool_size_bytes" in global_cfg:
@@ -143,6 +138,74 @@ def _render_tool_config(config: dict[str, Any]) -> str:
         "incremental_every_days = 1",
         'run_at = "02:00"',
         "",
+        "[filesystem]",
+        f'backend = "{backend}"',
+        "",
+    ]
+    if backend == "btrfs":
+        lines.extend(_render_btrfs_sections(config, retention))
+    elif backend == "zfs":
+        lines.extend(_render_zfs_sections(config, retention))
+    else:
+        raise ValueError(f"unsupported backend {backend!r}")
+    lines.extend(
+        [
+            "[s3]",
+            f'bucket = "{aws_cfg["bucket"]}"',
+            f'region = "{aws_cfg["region"]}"',
+            f'prefix = "{aws_cfg["prefix"]}"',
+            f"chunk_size_bytes = {chunk_size_bytes}",
+            f'storage_class_chunks = "{storage_class_chunks}"',
+            f'storage_class_manifest = "{storage_class_manifest}"',
+            f'concurrency = {int(backup_cfg["concurrency"])}',
+            f"spool_enabled = {str(spool_enabled).lower()}",
+            f'sse = "{aws_cfg["sse"]}"',
+            "",
+        ]
+    )
+    if isinstance(restore_cfg, dict) and restore_cfg:
+        restore_base = restore_cfg.get("target_base_dir")
+    else:
+        restore_base = None
+    restore_base = _resolve_restore_base(config, backend, restore_base)
+    if restore_base is not None:
+        lines.extend(
+            [
+                "[restore]",
+                f'target_base_dir = "{restore_base}"',
+            ]
+        )
+        if isinstance(restore_cfg, dict) and "verify_mode" in restore_cfg:
+            lines.append(f'verify_mode = "{restore_cfg["verify_mode"]}"')
+        if isinstance(restore_cfg, dict) and "sample_max_files" in restore_cfg:
+            lines.append(
+                f"sample_max_files = {int(restore_cfg['sample_max_files'])}"
+            )
+        if isinstance(restore_cfg, dict) and "wait_for_restore" in restore_cfg:
+            value = bool(restore_cfg["wait_for_restore"])
+            lines.append(f"wait_for_restore = {str(value).lower()}")
+        if (
+            isinstance(restore_cfg, dict)
+            and "restore_timeout_seconds" in restore_cfg
+        ):
+            lines.append(
+                f"restore_timeout_seconds = {int(restore_cfg['restore_timeout_seconds'])}"
+            )
+        if isinstance(restore_cfg, dict) and "restore_tier" in restore_cfg:
+            lines.append(f'restore_tier = "{restore_cfg["restore_tier"]}"')
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _render_btrfs_sections(config: dict[str, Any], retention: int) -> list[str]:
+    paths = config["paths"]
+    btrfs_cfg = config["btrfs"]
+    snapshots_dir = os.path.abspath(paths["snapshots_dir"])
+    mount_dir = os.path.abspath(paths["mount_dir"])
+    subvolume_paths = [
+        os.path.join(mount_dir, name) for name in btrfs_cfg["subvolumes"]
+    ]
+    return [
         "[snapshots]",
         f'base_dir = "{snapshots_dir}"',
         f"retain = {retention}",
@@ -150,45 +213,65 @@ def _render_tool_config(config: dict[str, Any]) -> str:
         "[subvolumes]",
         f"paths = {_format_toml_list(subvolume_paths)}",
         "",
-        "[s3]",
-        f'bucket = "{aws_cfg["bucket"]}"',
-        f'region = "{aws_cfg["region"]}"',
-        f'prefix = "{aws_cfg["prefix"]}"',
-        f"chunk_size_bytes = {chunk_size_bytes}",
-        f'storage_class_chunks = "{storage_class_chunks}"',
-        f'storage_class_manifest = "{storage_class_manifest}"',
-        f'concurrency = {int(backup_cfg["concurrency"])}',
-        f"spool_enabled = {str(spool_enabled).lower()}",
-        f'sse = "{aws_cfg["sse"]}"',
+    ]
+
+
+def _render_zfs_sections(config: dict[str, Any], retention: int) -> list[str]:
+    zfs_cfg = config["zfs"]
+    pool_name = zfs_cfg["pool_name"]
+    source_datasets = [
+        _qualify_zfs_dataset(pool_name, name) for name in zfs_cfg["source_datasets"]
+    ]
+    receive_parent_dataset = _qualify_zfs_dataset(
+        pool_name,
+        zfs_cfg["receive_parent_dataset"],
+    )
+    mount_root = os.path.abspath(zfs_cfg["mount_root"])
+    return [
+        "[snapshots]",
+        f"retain = {retention}",
+        "",
+        "[zfs]",
+        f'pool_name = "{pool_name}"',
+        f'mount_root = "{mount_root}"',
+        f"source_datasets = {_format_toml_list(source_datasets)}",
+        f'receive_parent_dataset = "{receive_parent_dataset}"',
+        f'snapshot_prefix = "{zfs_cfg["snapshot_prefix"]}"',
         "",
     ]
-    if isinstance(restore_cfg, dict) and restore_cfg:
-        restore_base = restore_cfg.get(
-            "target_base_dir", os.path.join(mount_dir, "restore")
+
+
+def _resolve_restore_base(
+    config: dict[str, Any],
+    backend: str,
+    restore_base: str | None,
+) -> str:
+    if restore_base:
+        return os.path.abspath(restore_base)
+    if backend == "btrfs":
+        return os.path.abspath(os.path.join(config["paths"]["mount_dir"], "restore"))
+    if backend == "zfs":
+        zfs_cfg = config["zfs"]
+        mount_root = os.path.abspath(zfs_cfg["mount_root"])
+        dataset_path = _zfs_dataset_mount_path(
+            zfs_cfg["pool_name"],
+            zfs_cfg["receive_parent_dataset"],
         )
-        lines.extend(
-            [
-                "[restore]",
-                f'target_base_dir = "{restore_base}"',
-            ]
-        )
-        if "verify_mode" in restore_cfg:
-            lines.append(f'verify_mode = "{restore_cfg["verify_mode"]}"')
-        if "sample_max_files" in restore_cfg:
-            lines.append(
-                f"sample_max_files = {int(restore_cfg['sample_max_files'])}"
-            )
-        if "wait_for_restore" in restore_cfg:
-            value = bool(restore_cfg["wait_for_restore"])
-            lines.append(f"wait_for_restore = {str(value).lower()}")
-        if "restore_timeout_seconds" in restore_cfg:
-            lines.append(
-                f"restore_timeout_seconds = {int(restore_cfg['restore_timeout_seconds'])}"
-            )
-        if "restore_tier" in restore_cfg:
-            lines.append(f'restore_tier = "{restore_cfg["restore_tier"]}"')
-        lines.append("")
-    return "\n".join(lines)
+        return os.path.join(mount_root, dataset_path)
+    raise ValueError(f"unsupported backend {backend!r}")
+
+
+def _qualify_zfs_dataset(pool_name: str, dataset_name: str) -> str:
+    if dataset_name == pool_name or dataset_name.startswith(pool_name + "/"):
+        return dataset_name
+    return f"{pool_name}/{dataset_name}"
+
+
+def _zfs_dataset_mount_path(pool_name: str, dataset_name: str) -> str:
+    qualified = _qualify_zfs_dataset(pool_name, dataset_name)
+    if qualified == pool_name:
+        return ""
+    return qualified[len(pool_name) + 1 :]
 
 
 def _format_toml_list(values: Sequence[str]) -> str:
