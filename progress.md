@@ -74,3 +74,4 @@
 - 2026-03-13 21:47 MDT: Completed Task 33 ZFS application backend implementation; commit "Add ZFS application backend".
 - 2026-03-13 21:57 MDT: Completed Task 34 backend-aware manifest and state schema; commit "Make manifest and state schema backend aware".
 - 2026-03-13 22:02 MDT: Completed Task 35 ZFS-aware unit and harness test coverage; commit "Backfill backend-aware coverage gaps".
+- 2026-03-13 22:10 MDT: Completed Task 36 documentation and example config updates; commit "Update backend-aware documentation".

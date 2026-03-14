@@ -52,3 +52,4 @@ Learnings
 - FYI: manifest v2 now records `filesystem` at the top level and `snapshot.identity` inside the snapshot metadata; restore still defaults missing `filesystem` to legacy Btrfs and falls back from missing `snapshot.identity` to `snapshot.path`.
 - FYI: state now treats `last_snapshot` as the backend snapshot identity and persists optional `last_snapshot_name`/`last_snapshot_path`; planner uses the name for availability checks and the identity for incremental send parents.
 - FYI: the local `python3 -m pytest` shim still runs the full suite even when you pass test file selectors, so invoking multiple `python3 -m pytest ...` commands in parallel can trip CLI lock-contention tests.
+- FYI: CLI `--source` values are backend-specific identifiers: Btrfs uses the basename of each configured path, while ZFS runs are easiest to operate with fully qualified dataset names such as `tank/data` because those are what manifests and current pointers record.

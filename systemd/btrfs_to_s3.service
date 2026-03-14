@@ -1,5 +1,5 @@
 [Unit]
-Description=Btrfs to S3 backup
+Description=Filesystem snapshot backup to S3
 Wants=network-online.target
 After=network-online.target
 

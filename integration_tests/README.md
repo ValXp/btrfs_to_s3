@@ -1,10 +1,11 @@
 # btrfs_to_s3 test harness
 
-This directory contains a Python-first test harness for running end-to-end backups
-against disposable filesystem fixtures and AWS S3. The Btrfs path exercises the
-main `python -m btrfs_to_s3` flow, while the ZFS path currently exercises raw
-send/receive probe scripts against a disposable file-backed pool. All runtime
-artifacts are created under `integration_tests/run/` (generated).
+This directory contains a Python-first harness for disposable Btrfs and ZFS
+fixtures plus AWS S3 test runs. The Btrfs path exercises the main
+`python -m btrfs_to_s3` flow. The ZFS path currently uses standalone
+send/receive probe scripts against a disposable file-backed pool, while still
+rendering a backend-aware tool config under `integration_tests/run/`.
+All runtime artifacts are created under `integration_tests/run/` (generated).
 
 Prerequisites
 - Python 3.14
@@ -60,9 +61,10 @@ How the ZFS harness differs
   `[filesystem].backend`. For ZFS configs it runs the standalone probe sequence
   (`run_zfs_snapshot_send_receive.py`, `run_zfs_incremental.py`,
   `run_zfs_retention.py`) instead of the main application flow.
-- The main application is still Btrfs-only at this stage. The runner now emits a
-  backend-aware tool config for ZFS, but the ZFS `run_all.py` path is for probe
-  coverage rather than `python -m btrfs_to_s3` end-to-end backups.
+- The main application now has a ZFS backend, but `run_all.py` intentionally
+  keeps the ZFS path focused on raw probe coverage. Live application-backed ZFS
+  validation is a separate host-level step because it needs a real ZFS kernel
+  environment and extra privileges.
 
 BTRFS_TO_S3_CMD override
 - Optional: set `BTRFS_TO_S3_CMD` in `integration_tests/config/test.env` as a JSON array.
@@ -73,15 +75,19 @@ Quickstart
 1. Create a virtualenv and install dependencies:
    - `python3.14 -m venv integration_tests/.venv`
    - `integration_tests/.venv/bin/pip install -r integration_tests/requirements.txt`
-2. Edit `integration_tests/config/test.toml` and `integration_tests/config/test.env`.
+2. Edit the config you plan to run:
+   - Btrfs: `integration_tests/config/test.toml`
+   - ZFS probes: `integration_tests/config/test_zfs.toml`
+   - Shared credentials/env: `integration_tests/config/test.env`
 3. Load AWS credentials (so sudo preserves them):
    - `set -a; . integration_tests/config/test.env; set +a`
 4. Run the full harness (from repo root so paths match config):
    - `sudo -E python3 integration_tests/scripts/run_all.py --config integration_tests/config/test.toml`
-   - Optional: add `--skip-s3` to run local setup/seed/mutate without S3.
-   - Optional: add `--include-large` to run the multi-chunk scenario.
+   - Optional: add `--skip-s3` to run local Btrfs setup/seed/mutate without S3.
+   - Optional: add `--include-large` to run the Btrfs multi-chunk scenario.
 5. Run the ZFS probe harness (setup + probes + teardown):
    - `sudo -E python3 integration_tests/scripts/run_all.py --config integration_tests/config/test_zfs.toml`
+   - `--skip-s3` has no effect on the ZFS probe flow.
 6. Run the multi-chunk scenario:
    - `sudo -E python3 integration_tests/scripts/run_large.py --config integration_tests/config/test_large.toml`
    - `--include-large` is only defined for the Btrfs harness right now.
@@ -94,7 +100,7 @@ Clearing logs between runs
   - `find integration_tests/run/large/logs -type f -delete`
   - `find integration_tests/run/small/logs -type f -delete`
 
-Small vs large dataset scenarios
+Small vs large dataset scenarios (Btrfs)
 - Small dataset / large chunk (single chunk expected):
   - Config: `integration_tests/config/test_small.toml` (1 MiB dataset, 10 MiB chunks).
   - Run: `sudo -E python3 integration_tests/scripts/run_full.py --config integration_tests/config/test_small.toml`
@@ -115,8 +121,11 @@ Privilege model
   `SUDO_USER` so seed/mutate/verify scripts can run without sudo.
 - Run `integration_tests/scripts/teardown_btrfs.py` with sudo to unmount and detach the loop
   device.
+- Run `integration_tests/scripts/setup_zfs.py` and `teardown_zfs.py` with sudo
+  or equivalent privileges so the harness can create/destroy the disposable pool
+  and its datasets.
 
 Notes
-- Btrfs setup/teardown steps require root privileges.
-- Logs are written under `integration_tests/run/logs/`.
+- Btrfs and ZFS setup/teardown steps require elevated privileges.
+- Logs are written under the configured `paths.logs_dir`.
 - The runner adds the repo root to `PYTHONPATH` if it is not already set.

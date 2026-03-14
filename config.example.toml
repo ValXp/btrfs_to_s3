@@ -11,19 +11,23 @@ incremental_every_days = 7
 run_at = "02:00"
 
 [filesystem]
-backend = "btrfs" # btrfs|zfs
+backend = "btrfs" # btrfs|zfs; omit [filesystem] only for legacy Btrfs configs
 
 [snapshots]
-# Btrfs only: base_dir is where local readonly snapshots are created.
-# ZFS configs may omit base_dir and keep only retain.
+# Btrfs: base_dir is required and is where local readonly snapshots are created.
+# ZFS: omit base_dir and keep only retain.
 base_dir = "/srv/snapshots"
 retain = 2
 
 [subvolumes]
 # Btrfs only: source subvolume paths on the local host.
+# CLI/source identifiers are the basenames of these paths: data, home.
 paths = ["/srv/data", "/srv/home"]
 
 # For ZFS, switch [filesystem].backend to "zfs", omit [subvolumes], and use:
+#
+# [snapshots]
+# retain = 2
 #
 # [zfs]
 # pool_name = "tank"
@@ -31,6 +35,8 @@ paths = ["/srv/data", "/srv/home"]
 # source_datasets = ["tank/data", "tank/home"]
 # receive_parent_dataset = "tank/restore"
 # snapshot_prefix = "btrfs-to-s3"
+#
+# Use fully qualified dataset names so CLI --source values are obvious.
 
 [s3]
 bucket = "my-backup-bucket"
@@ -45,6 +51,8 @@ sse = "AES256"
 
 [restore]
 target_base_dir = "/srv/restore"
+# For ZFS, set target_base_dir to the mounted path of zfs.receive_parent_dataset,
+# for example "/tank/restore".
 verify_mode = "full" # full|sample|none
 sample_max_files = 1000
 wait_for_restore = true

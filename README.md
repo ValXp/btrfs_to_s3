@@ -1,6 +1,8 @@
 # btrfs_to_s3
 
-Backup tooling for Btrfs snapshots to AWS S3.
+Backup tooling for Btrfs and ZFS snapshot/send streams to AWS S3. The project
+name is historical; the current config and orchestration code support both
+backends.
 
 ## Usage
 
@@ -8,15 +10,23 @@ Backup tooling for Btrfs snapshots to AWS S3.
 
 ```sh
 python3 -m btrfs_to_s3 backup --config /etc/btrfs_to_s3/config.toml
-python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --subvolume data --target /srv/restore/data
+python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --source data --target /srv/restore/data
 ```
+
+`--source` is the backend-neutral flag. `--subvolume` is still accepted as a
+compatibility alias.
+
+Source identifiers are backend-specific:
+- Btrfs uses the basename of each `subvolumes.paths` entry, such as `data`.
+- ZFS uses the dataset identifier recorded in manifests and current pointers,
+  such as `tank/data`.
 
 ### Manual runs
 
 Manual runs are useful when you want to:
 - Run an out-of-band backup (e.g., right before a risky upgrade).
 - Force a backup even if it is not due per schedule.
-- Restrict a backup to specific subvolumes.
+- Restrict a backup to specific configured sources.
 - Skip uploads to S3 to validate snapshot creation locally.
 
 Examples:
@@ -28,8 +38,11 @@ python3 -m btrfs_to_s3 backup --config /etc/btrfs_to_s3/config.toml --dry-run
 # Force a run regardless of schedule.
 python3 -m btrfs_to_s3 backup --config /etc/btrfs_to_s3/config.toml --once
 
-# Back up only specific subvolumes (repeatable).
-python3 -m btrfs_to_s3 backup --config /etc/btrfs_to_s3/config.toml --subvolume data --subvolume root
+# Back up only specific Btrfs sources (repeatable).
+python3 -m btrfs_to_s3 backup --config /etc/btrfs_to_s3/config.toml --source data --source root
+
+# Back up only a specific ZFS dataset.
+python3 -m btrfs_to_s3 backup --config /etc/btrfs_to_s3/config.toml --source tank/data
 
 # Validate snapshot creation without uploading to S3.
 python3 -m btrfs_to_s3 backup --config /etc/btrfs_to_s3/config.toml --no-s3
@@ -38,22 +51,37 @@ python3 -m btrfs_to_s3 backup --config /etc/btrfs_to_s3/config.toml --no-s3
 Restores can override manifest selection and verification:
 
 ```sh
-# Restore the current manifest chain for a subvolume.
-python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --subvolume data --target /srv/restore/data
+# Restore the current manifest chain for a Btrfs source.
+python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --source data --target /srv/restore/data
+
+# Restore a ZFS dataset into a target under restore.target_base_dir.
+python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --source tank/data --target /tank/restore/data
 
 # Restore from a specific manifest key and skip verification.
-python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --subvolume data --target /srv/restore/data \
-  --manifest-key subvol/data/full/manifest.json --verify none
+python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --source data --target /srv/restore/data \
+  --manifest-key subvol/data/full/manifest-20260101T000000Z.json --verify none
 ```
 
 AWS credentials are detected via `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
 
 ## Configuration
 
-`btrfs_to_s3` expects an absolute path to `config.toml`. All paths in the config must be absolute.
-Required fields: `subvolumes.paths`, `s3.bucket`, `s3.region`, `s3.prefix`.
+`btrfs_to_s3` expects an absolute path to `config.toml`. All configured paths
+must be absolute after `~` expansion.
 
-Example `config.toml`:
+Backend selection:
+- Recommended: set `[filesystem].backend = "btrfs"` or `"zfs"`.
+- Backward compatibility: if `[filesystem]` is omitted, the loader treats the
+  config as legacy Btrfs and requires `snapshots.base_dir` plus
+  `subvolumes.paths`.
+
+Required fields by backend:
+- Shared: `s3.bucket`, `s3.region`, `s3.prefix`
+- Btrfs: `snapshots.base_dir`, `subvolumes.paths`
+- ZFS: `[zfs] pool_name`, `mount_root`, `source_datasets`,
+  `receive_parent_dataset`, `snapshot_prefix`
+
+Example Btrfs `config.toml`:
 
 ```toml
 [global]
@@ -95,9 +123,61 @@ restore_timeout_seconds = 259200
 restore_tier = "Standard"
 ```
 
+Equivalent ZFS shape:
+
+```toml
+[global]
+log_level = "info"
+state_path = "/var/lib/btrfs_to_s3/state.json"
+lock_path = "/var/lock/btrfs_to_s3.lock"
+spool_dir = "/mnt/ssd/btrfs_to_s3_spool"
+spool_size_bytes = 214748364800
+
+[schedule]
+full_every_days = 180
+incremental_every_days = 7
+run_at = "02:00"
+
+[filesystem]
+backend = "zfs"
+
+[snapshots]
+retain = 2
+
+[zfs]
+pool_name = "tank"
+mount_root = "/tank"
+source_datasets = ["tank/data", "tank/home"]
+receive_parent_dataset = "tank/restore"
+snapshot_prefix = "btrfs-to-s3"
+
+[s3]
+bucket = "my-backup-bucket"
+region = "us-east-1"
+prefix = "zfs/host-01"
+chunk_size_bytes = 214748364800
+storage_class_chunks = "DEEP_ARCHIVE"
+storage_class_manifest = "STANDARD"
+concurrency = 4
+spool_enabled = false
+sse = "AES256"
+
+[restore]
+target_base_dir = "/tank/restore"
+verify_mode = "full"
+sample_max_files = 1000
+wait_for_restore = true
+restore_timeout_seconds = 259200
+restore_tier = "Standard"
+```
+
 You can copy `config.example.toml` as a starting point.
 
 ### Configuration reference
+
+`filesystem`:
+- `filesystem.backend`: optional; `btrfs` or `zfs`; defaults to legacy `btrfs`
+  behavior when omitted.
 
 `global`:
 - `global.log_level`: default `info`; one of `debug|info|warning|error|critical`; can be overridden by `--log-level`.
@@ -112,17 +192,24 @@ You can copy `config.example.toml` as a starting point.
 - `schedule.run_at`: default `02:00`; 24-hour `HH:MM` time used to decide if a run is due.
 
 `snapshots`:
-- `snapshots.base_dir`: default `/srv/snapshots`; absolute directory where Btrfs snapshots are created.
-- `snapshots.retain`: default `2`; must be >= 1; number of snapshots kept per subvolume (parent snapshots are preserved while needed by incrementals).
+- `snapshots.base_dir`: default `/srv/snapshots`; required for Btrfs; absolute directory where local readonly snapshots are created.
+- `snapshots.retain`: default `2`; must be >= 1; number of snapshots kept per source (parent snapshots are preserved while needed by incrementals).
 
 `subvolumes`:
-- `subvolumes.paths`: required; list of absolute subvolume paths to back up (at least one path required).
+- `subvolumes.paths`: required for Btrfs; list of absolute source subvolume paths to back up.
+
+`zfs`:
+- `zfs.pool_name`: required when `filesystem.backend = "zfs"`; pool name used to qualify datasets.
+- `zfs.mount_root`: required for ZFS; absolute mount root for source datasets and restore target mapping.
+- `zfs.source_datasets`: required for ZFS; list of dataset names to back up. Use fully qualified names such as `tank/data` to keep CLI `--source` values obvious.
+- `zfs.receive_parent_dataset`: required for ZFS; dataset under which restores are received.
+- `zfs.snapshot_prefix`: required for ZFS; prefix applied to generated snapshot names.
 
 `s3`:
 - `s3.bucket`: required; S3 bucket name for manifests and chunks.
 - `s3.region`: required; AWS region for the S3 client.
 - `s3.prefix`: required; prefix inside the bucket used as the root for backup objects.
-- `s3.chunk_size_bytes`: default `214748364800` (200 GiB); must be > 0; logical chunk size for Btrfs send streams (multipart part sizes are capped at 5 GiB).
+- `s3.chunk_size_bytes`: default `214748364800` (200 GiB); must be > 0; logical chunk size for send streams (multipart part sizes are capped at 5 GiB).
 - `s3.storage_class_chunks`: default `DEEP_ARCHIVE`; storage class for chunk objects (archive classes may require restores).
 - `s3.storage_class_manifest`: default `STANDARD`; storage class for manifest/current objects.
 - `s3.concurrency`: default `4`; must be >= 1; number of multipart part uploads in flight (further capped by spooling limits).
@@ -136,6 +223,27 @@ You can copy `config.example.toml` as a starting point.
 - `restore.wait_for_restore`: default `true`; wait for archive-class restores to become available before downloading.
 - `restore.restore_timeout_seconds`: default `259200` (72 hours); must be > 0; timeout while waiting for archive restores.
 - `restore.restore_tier`: default `Standard`; restore tier used for archival storage classes.
+
+### Restore semantics
+
+- Btrfs restores receive into `target.parent` and then rename the received
+  subvolume into the exact `--target` path. Metadata verification uses
+  `btrfs subvolume show`.
+- ZFS restores must target a path under `restore.target_base_dir`. The relative
+  path beneath that base is mapped onto child datasets of
+  `zfs.receive_parent_dataset`, then the restored dataset is made writable and
+  verified with `zfs get`.
+
+### Manifest and state compatibility
+
+- New manifests are version `2` and record `filesystem` plus the authoritative
+  `snapshot.identity`. Btrfs manifests also keep `snapshot.path`.
+- Restore still accepts legacy manifests that omit `filesystem` and treats them
+  as Btrfs. If `snapshot.identity` is missing, restore falls back to
+  `snapshot.path`.
+- Local state now stores the backend snapshot identity in `last_snapshot` and
+  may also keep `last_snapshot_name` and `last_snapshot_path` for planner and
+  compatibility purposes.
 
 ## Development
 
@@ -163,7 +271,8 @@ sudo cp systemd/btrfs_to_s3.service /etc/systemd/system/btrfs_to_s3.service
 sudo cp systemd/btrfs_to_s3.timer /etc/systemd/system/btrfs_to_s3.timer
 ```
 
-2. Ensure `/etc/btrfs_to_s3/config.toml` exists and matches your host paths.
+2. Ensure `/etc/btrfs_to_s3/config.toml` exists and matches your backend and
+   host paths.
 3. Enable the timer:
 
 ```sh
@@ -183,4 +292,5 @@ Manual systemd run:
 sudo systemctl start btrfs_to_s3.service
 ```
 
-If you need a one-off run with different flags or a different config, run the CLI directly instead of systemd (see "Manual runs" above).
+If you need a one-off run with different flags or a different config, run the
+CLI directly instead of systemd (see "Manual runs" above).
