@@ -18,6 +18,10 @@ class StateLoadError(RuntimeError):
     """Raised when a persisted state file cannot be read or parsed."""
 
 
+class StateSaveError(RuntimeError):
+    """Raised when a persisted state file cannot be written."""
+
+
 @dataclass(frozen=True)
 class SourceState:
     # last_snapshot stores the backend-specific snapshot identity.
@@ -142,12 +146,21 @@ def load_state(path: Path) -> State:
 
 
 def save_state(path: Path, state: State) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(".tmp")
-    with temp_path.open("w", encoding="utf-8") as handle:
-        json.dump(state.to_dict(), handle, indent=2, sort_keys=True)
-        handle.write("\n")
-    temp_path.replace(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with temp_path.open("w", encoding="utf-8") as handle:
+            json.dump(state.to_dict(), handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        temp_path.replace(path)
+    except OSError as exc:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise StateSaveError(
+            f"failed to write state file {path}: {exc}"
+        ) from exc
 
 
 def _legacy_snapshot_path(value: str) -> str | None:

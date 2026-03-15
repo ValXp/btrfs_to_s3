@@ -12,6 +12,7 @@ from btrfs_to_s3.state import (
     SourceState,
     State,
     StateLoadError,
+    StateSaveError,
     SubvolumeState,
     load_state,
     save_state,
@@ -70,6 +71,39 @@ class StateTests(unittest.TestCase):
             ):
                 with self.assertRaises(StateLoadError) as exc_info:
                     load_state(path)
+
+        self.assertIn(str(path), str(exc_info.exception))
+        self.assertIsInstance(exc_info.exception.__cause__, OSError)
+
+    def test_save_error_raises_state_save_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "state.json"
+            state = State()
+
+            with mock.patch.object(
+                Path,
+                "open",
+                side_effect=OSError("permission denied"),
+            ):
+                with self.assertRaises(StateSaveError) as exc_info:
+                    save_state(path, state)
+
+        self.assertIn(str(path), str(exc_info.exception))
+        self.assertIsInstance(exc_info.exception.__cause__, OSError)
+
+    def test_replace_error_raises_state_save_error_and_cleans_temp_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "state.json"
+            temp_path = path.with_suffix(".tmp")
+
+            with mock.patch.object(
+                Path,
+                "replace",
+                side_effect=OSError("device busy"),
+            ):
+                with self.assertRaises(StateSaveError) as exc_info:
+                    save_state(path, State())
+            self.assertFalse(temp_path.exists())
 
         self.assertIn(str(path), str(exc_info.exception))
         self.assertIsInstance(exc_info.exception.__cause__, OSError)

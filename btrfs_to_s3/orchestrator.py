@@ -45,6 +45,7 @@ from btrfs_to_s3.state import (
     SourceState,
     State,
     StateLoadError,
+    StateSaveError,
     load_state,
     save_state,
 )
@@ -189,15 +190,17 @@ class BackupOrchestrator:
             )
             if result != 0:
                 return result
-            self._save_backup_state(
+            if not self._save_backup_state(
                 state_sources,
                 last_run_at=state.last_run_at,
-            )
+            ):
+                return 1
 
-        self._save_backup_state(
+        if not self._save_backup_state(
             state_sources,
             last_run_at=timestamp,
-        )
+        ):
+            return 1
         return 0
 
     def _select_sources(
@@ -279,11 +282,16 @@ class BackupOrchestrator:
         state_sources: dict[str, SourceState],
         *,
         last_run_at: str | None,
-    ) -> None:
-        save_state(
-            self.config.global_cfg.state_path,
-            State(sources=state_sources, last_run_at=last_run_at),
-        )
+    ) -> bool:
+        try:
+            save_state(
+                self.config.global_cfg.state_path,
+                State(sources=state_sources, last_run_at=last_run_at),
+            )
+        except (StateSaveError, OSError) as exc:
+            self.logger.error("event=backup_state_save_failed error=%s", exc)
+            return False
+        return True
 
     def _backup_item(
         self,
