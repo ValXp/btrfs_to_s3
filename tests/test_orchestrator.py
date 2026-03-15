@@ -865,7 +865,17 @@ class OrchestratorRestoreTests(unittest.TestCase):
             ), mock.patch.object(
                 RestoreOrchestrator,
                 "_resolve_chain",
-                return_value=[ManifestInfo("key", "full", None, (), {}, None)],
+                return_value=[
+                    ManifestInfo(
+                        "key",
+                        "full",
+                        None,
+                        (),
+                        {},
+                        None,
+                        source_name="data",
+                    )
+                ],
             ), mock.patch(
                 "btrfs_to_s3.orchestrator.restore_chain",
                 return_value=0,
@@ -987,7 +997,17 @@ class OrchestratorRestoreTests(unittest.TestCase):
             ), mock.patch.object(
                 RestoreOrchestrator,
                 "_resolve_chain",
-                return_value=[ManifestInfo("key", "full", None, (), {}, None)],
+                return_value=[
+                    ManifestInfo(
+                        "key",
+                        "full",
+                        None,
+                        (),
+                        {},
+                        None,
+                        source_name="data",
+                    )
+                ],
             ), mock.patch(
                 "btrfs_to_s3.orchestrator.restore_chain",
                 side_effect=Exception("restore failed"),
@@ -1020,7 +1040,17 @@ class OrchestratorRestoreTests(unittest.TestCase):
             ), mock.patch.object(
                 RestoreOrchestrator,
                 "_resolve_chain",
-                return_value=[ManifestInfo("key", "full", None, (), {}, None)],
+                return_value=[
+                    ManifestInfo(
+                        "key",
+                        "full",
+                        None,
+                        (),
+                        {},
+                        None,
+                        source_name="data",
+                    )
+                ],
             ), mock.patch(
                 "btrfs_to_s3.orchestrator.restore_chain",
                 return_value=1,
@@ -1028,6 +1058,58 @@ class OrchestratorRestoreTests(unittest.TestCase):
                 RestoreOrchestrator, "_verify_restore", return_value=1
             ):
                 self.assertEqual(orchestrator.run(request), 1)
+
+    def test_restore_manifest_validation_failure_returns_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir)
+            request = RestoreRequest(
+                source_name="data",
+                target=Path(temp_dir) / "restore",
+                manifest_key="manifest.json",
+                restore_timeout=None,
+                wait_restore=None,
+                verify="none",
+            )
+            orchestrator = RestoreOrchestrator(
+                config, logger=logging.getLogger("btrfs_to_s3.orchestrator_test")
+            )
+            manifests = [
+                ManifestInfo(
+                    key="manifest.json",
+                    kind="full",
+                    parent_manifest=None,
+                    chunks=(),
+                    s3={},
+                    snapshot_path=None,
+                    source_name="other",
+                )
+            ]
+            with mock.patch(
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_init_s3_client",
+                return_value=object(),
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_resolve_chain",
+                return_value=manifests,
+            ), mock.patch(
+                "btrfs_to_s3.orchestrator.restore_chain"
+            ) as restore_chain_mock, self.assertLogs(
+                "btrfs_to_s3.orchestrator_test", level="ERROR"
+            ) as logs:
+                self.assertEqual(orchestrator.run(request), 1)
+
+            restore_chain_mock.assert_not_called()
+            self.assertTrue(
+                any(
+                    "event=restore_manifest_failed" in entry
+                    and "requested source" in entry
+                    for entry in logs.output
+                )
+            )
 
     def test_restore_init_s3_client_logs_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

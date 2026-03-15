@@ -38,6 +38,7 @@ from btrfs_to_s3.restore import (
     fetch_current_manifest_key,
     resolve_manifest_chain,
     restore_chain,
+    validate_manifest_chain,
     verify_restore,
 )
 from btrfs_to_s3.state import SourceState, State, load_state, save_state
@@ -571,6 +572,15 @@ class RestoreOrchestrator:
 
         manifests = self._resolve_chain(client, manifest_key)
         if manifests is None:
+            return 1
+        try:
+            validate_manifest_chain(
+                manifests,
+                expected_source_name=request.source_name,
+                expected_filesystem=backend.name,
+            )
+        except RestoreError as exc:
+            self.logger.error("event=restore_manifest_failed error=%s", exc)
             return 1
 
         wait_restore = (

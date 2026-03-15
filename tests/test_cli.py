@@ -32,6 +32,7 @@ from btrfs_to_s3.config import (
 )
 from btrfs_to_s3.lock import LockError
 from btrfs_to_s3.planner import PlanItem
+from btrfs_to_s3.restore import ManifestInfo
 from btrfs_to_s3.snapshots import Snapshot
 
 CONFIG_TOML = """
@@ -791,7 +792,17 @@ class CliTests(unittest.TestCase):
                 return_value="manifest.json",
             ), mock.patch(
                 "btrfs_to_s3.orchestrator.resolve_manifest_chain",
-                return_value=["manifest"],
+                return_value=[
+                    ManifestInfo(
+                        key="manifest.json",
+                        kind="full",
+                        parent_manifest=None,
+                        chunks=(),
+                        s3={},
+                        snapshot_path=None,
+                        source_name="data",
+                    )
+                ],
             ), mock.patch(
                 "btrfs_to_s3.orchestrator.restore_chain", return_value=2048
             ), mock.patch(

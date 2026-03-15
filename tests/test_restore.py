@@ -70,6 +70,7 @@ class RestoreTests(unittest.TestCase):
     def test_resolve_manifest_chain_orders_full_first(self) -> None:
         client = FakeS3()
         full_manifest = {
+            "subvolume": "data",
             "kind": "full",
             "parent_manifest": None,
             "chunks": [
@@ -78,6 +79,7 @@ class RestoreTests(unittest.TestCase):
             "s3": {"storage_class": "STANDARD"},
         }
         inc_manifest = {
+            "subvolume": "data",
             "kind": "inc",
             "parent_manifest": "full/manifest.json",
             "chunks": [
@@ -101,10 +103,58 @@ class RestoreTests(unittest.TestCase):
             "inc/manifest.json",
         ])
         self.assertEqual(manifests[0].kind, "full")
+        self.assertEqual(manifests[0].source_name, "data")
+
+    def test_validate_manifest_chain_rejects_source_mismatch(self) -> None:
+        manifests = [
+            restore.ManifestInfo(
+                key="full/manifest.json",
+                kind="full",
+                parent_manifest=None,
+                chunks=(),
+                s3={},
+                snapshot_path="/snapshots/data__20260101T000000Z__full",
+                source_name="other",
+            )
+        ]
+
+        with self.assertRaises(restore.RestoreError) as context:
+            restore.validate_manifest_chain(
+                manifests,
+                expected_source_name="data",
+                expected_filesystem="btrfs",
+            )
+
+        self.assertIn("requested source", str(context.exception))
+
+    def test_validate_manifest_chain_rejects_filesystem_mismatch(self) -> None:
+        manifests = [
+            restore.ManifestInfo(
+                key="full/manifest.json",
+                kind="full",
+                parent_manifest=None,
+                chunks=(),
+                s3={},
+                snapshot_path=None,
+                filesystem="zfs",
+                snapshot_identity="tank/data@snap",
+                source_name="tank/data",
+            )
+        ]
+
+        with self.assertRaises(restore.RestoreError) as context:
+            restore.validate_manifest_chain(
+                manifests,
+                expected_source_name="tank/data",
+                expected_filesystem="btrfs",
+            )
+
+        self.assertIn("restore backend", str(context.exception))
 
     def test_missing_parent_manifest_reports_key(self) -> None:
         client = FakeS3()
         inc_manifest = {
+            "subvolume": "data",
             "kind": "inc",
             "parent_manifest": "missing/manifest.json",
             "chunks": [
@@ -164,6 +214,7 @@ class RestoreTests(unittest.TestCase):
     def test_resolve_manifest_chain_detects_loop(self) -> None:
         client = FakeS3()
         manifest = {
+            "subvolume": "data",
             "kind": "inc",
             "parent_manifest": "loop/manifest.json",
             "chunks": [{"key": "chunk.bin", "sha256": "abc", "size": 1}],
@@ -181,6 +232,7 @@ class RestoreTests(unittest.TestCase):
     def test_resolve_manifest_chain_requires_full(self) -> None:
         client = FakeS3()
         manifest = {
+            "subvolume": "data",
             "kind": "inc",
             "parent_manifest": None,
             "chunks": [{"key": "chunk.bin", "sha256": "abc", "size": 1}],
@@ -239,43 +291,59 @@ class RestoreTests(unittest.TestCase):
 
         with self.assertRaises(restore.RestoreError):
             restore.parse_manifest(
-                {"kind": "full", "parent_manifest": 123, "chunks": []},
+                {
+                    "subvolume": "data",
+                    "kind": "full",
+                    "parent_manifest": 123,
+                    "chunks": [],
+                },
                 "manifest.json",
             )
 
         with self.assertRaises(restore.RestoreError):
             restore.parse_manifest(
-                {"kind": "full", "chunks": []},
+                {"subvolume": "data", "kind": "full", "chunks": []},
                 "manifest.json",
             )
 
         with self.assertRaises(restore.RestoreError):
             restore.parse_manifest(
-                {"kind": "full", "chunks": ["bad"]},
-                "manifest.json",
-            )
-
-        with self.assertRaises(restore.RestoreError):
-            restore.parse_manifest(
-                {"kind": "full", "chunks": [{"sha256": "x"}]},
-                "manifest.json",
-            )
-
-        with self.assertRaises(restore.RestoreError):
-            restore.parse_manifest(
-                {"kind": "full", "chunks": [{"key": "a"}]},
-                "manifest.json",
-            )
-
-        with self.assertRaises(restore.RestoreError):
-            restore.parse_manifest(
-                {"kind": "full", "chunks": [{"key": "a", "sha256": "x", "size": "bad"}]},
+                {"subvolume": "data", "kind": "full", "chunks": ["bad"]},
                 "manifest.json",
             )
 
         with self.assertRaises(restore.RestoreError):
             restore.parse_manifest(
                 {
+                    "subvolume": "data",
+                    "kind": "full",
+                    "chunks": [{"sha256": "x"}],
+                },
+                "manifest.json",
+            )
+
+        with self.assertRaises(restore.RestoreError):
+            restore.parse_manifest(
+                {"subvolume": "data", "kind": "full", "chunks": [{"key": "a"}]},
+                "manifest.json",
+            )
+
+        with self.assertRaises(restore.RestoreError):
+            restore.parse_manifest(
+                {
+                    "subvolume": "data",
+                    "kind": "full",
+                    "chunks": [
+                        {"key": "a", "sha256": "x", "size": "bad"}
+                    ],
+                },
+                "manifest.json",
+            )
+
+        with self.assertRaises(restore.RestoreError):
+            restore.parse_manifest(
+                {
+                    "subvolume": "data",
                     "kind": "full",
                     "chunks": [{"key": "a", "sha256": "x", "size": 1}],
                     "s3": [],
@@ -283,18 +351,32 @@ class RestoreTests(unittest.TestCase):
                 "manifest.json",
             )
 
+    def test_parse_manifest_rejects_missing_source_name(self) -> None:
+        with self.assertRaises(restore.RestoreError) as context:
+            restore.parse_manifest(
+                {
+                    "kind": "full",
+                    "chunks": [{"key": "a", "sha256": "x", "size": 1}],
+                },
+                "manifest.json",
+            )
+        self.assertIn("missing source name", str(context.exception))
+
     def test_parse_manifest_accepts_empty_parent(self) -> None:
         payload = {
+            "subvolume": "data",
             "kind": "full",
             "parent_manifest": "",
             "chunks": [{"key": "a", "sha256": "x", "size": 1}],
         }
         manifest = restore.parse_manifest(payload, "manifest.json")
         self.assertIsNone(manifest.parent_manifest)
+        self.assertEqual(manifest.source_name, "data")
 
     def test_parse_manifest_defaults_legacy_btrfs_identity_to_path(self) -> None:
         manifest = restore.parse_manifest(
             {
+                "subvolume": "data",
                 "kind": "full",
                 "chunks": [{"key": "a", "sha256": "x", "size": 1}],
                 "snapshot": {"path": "/srv/snapshots/data__20260101T000000Z__full"},
@@ -303,6 +385,7 @@ class RestoreTests(unittest.TestCase):
         )
 
         self.assertEqual(manifest.filesystem, "btrfs")
+        self.assertEqual(manifest.source_name, "data")
         self.assertEqual(
             manifest.snapshot_identity,
             "/srv/snapshots/data__20260101T000000Z__full",
@@ -316,6 +399,7 @@ class RestoreTests(unittest.TestCase):
         manifest = restore.parse_manifest(
             {
                 "filesystem": "zfs",
+                "subvolume": "tank/data",
                 "kind": "full",
                 "chunks": [{"key": "a", "sha256": "x", "size": 1}],
                 "snapshot": {
@@ -330,17 +414,31 @@ class RestoreTests(unittest.TestCase):
         )
 
         self.assertEqual(manifest.filesystem, "zfs")
+        self.assertEqual(manifest.source_name, "tank/data")
         self.assertEqual(
             manifest.snapshot_identity,
             "tank/data@btrfs-to-s3-tank_x2f_data__20260101T000000Z__full",
         )
         self.assertIsNone(manifest.snapshot_path)
 
+    def test_parse_manifest_accepts_source_name_alias(self) -> None:
+        manifest = restore.parse_manifest(
+            {
+                "source_name": "tank/data",
+                "kind": "full",
+                "chunks": [{"key": "a", "sha256": "x", "size": 1}],
+            },
+            "manifest.json",
+        )
+
+        self.assertEqual(manifest.source_name, "tank/data")
+
     def test_parse_manifest_rejects_invalid_filesystem(self) -> None:
         with self.assertRaises(restore.RestoreError) as context:
             restore.parse_manifest(
                 {
                     "filesystem": "xfs",
+                    "subvolume": "data",
                     "kind": "full",
                     "chunks": [{"key": "a", "sha256": "x", "size": 1}],
                 },
@@ -353,6 +451,7 @@ class RestoreTests(unittest.TestCase):
             restore.parse_manifest(
                 {
                     "filesystem": "zfs",
+                    "subvolume": "tank/data",
                     "kind": "full",
                     "chunks": [{"key": "a", "sha256": "x", "size": 1}],
                     "snapshot": {"path": None},

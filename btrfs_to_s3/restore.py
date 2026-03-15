@@ -40,6 +40,7 @@ class ManifestInfo:
     snapshot_path: str | None
     filesystem: str = "btrfs"
     snapshot_identity: str | None = None
+    source_name: str | None = None
 
     @property
     def snapshot_reference(self) -> str | None:
@@ -105,8 +106,23 @@ def fetch_manifest(client, bucket: str, key: str) -> ManifestInfo:
     return parse_manifest(payload, key)
 
 
+def validate_manifest_chain(
+    manifests: Iterable[ManifestInfo],
+    *,
+    expected_source_name: str,
+    expected_filesystem: str,
+) -> None:
+    for manifest in manifests:
+        _validate_manifest_selection(
+            manifest,
+            expected_source_name=expected_source_name,
+            expected_filesystem=expected_filesystem,
+        )
+
+
 def parse_manifest(payload: dict[str, Any], key: str) -> ManifestInfo:
     filesystem = _parse_filesystem(payload, key)
+    source_name = _parse_source_name(payload, key)
     kind = payload.get("kind")
     if not isinstance(kind, str) or not kind:
         raise RestoreError(f"{key} missing kind")
@@ -150,6 +166,7 @@ def parse_manifest(payload: dict[str, Any], key: str) -> ManifestInfo:
         snapshot_path=snapshot_path,
         filesystem=filesystem,
         snapshot_identity=snapshot_identity,
+        source_name=source_name,
     )
 
 
@@ -417,6 +434,37 @@ def _parse_filesystem(payload: dict[str, Any], key: str) -> str:
     if filesystem not in {"btrfs", "zfs"}:
         raise RestoreError(f"{key} unsupported filesystem {filesystem!r}")
     return filesystem
+
+
+def _parse_source_name(payload: dict[str, Any], key: str) -> str:
+    source_name = payload.get("source_name", payload.get("subvolume"))
+    if not isinstance(source_name, str) or not source_name:
+        raise RestoreError(f"{key} missing source name")
+    return source_name
+
+
+def _validate_manifest_selection(
+    manifest: ManifestInfo,
+    *,
+    expected_source_name: str | None,
+    expected_filesystem: str | None,
+) -> None:
+    if (
+        expected_filesystem is not None
+        and manifest.filesystem != expected_filesystem
+    ):
+        raise RestoreError(
+            f"{manifest.key} filesystem {manifest.filesystem!r} "
+            f"does not match restore backend {expected_filesystem!r}"
+        )
+    if (
+        expected_source_name is not None
+        and manifest.source_name != expected_source_name
+    ):
+        raise RestoreError(
+            f"{manifest.key} source {manifest.source_name!r} "
+            f"does not match requested source {expected_source_name!r}"
+        )
 
 
 def _parse_snapshot_identity(payload: dict[str, Any], key: str) -> str | None:
