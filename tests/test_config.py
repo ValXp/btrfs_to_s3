@@ -9,13 +9,16 @@ from pathlib import Path
 from btrfs_to_s3 import config as config_module
 
 
+MIN_SPOOL_SIZE_BYTES = 5 * 1024 * 1024
+
+
 VALID_TOML = """
 [global]
 log_level = "info"
 state_path = "/tmp/btrfs_to_s3/state.json"
 lock_path = "/tmp/btrfs_to_s3/lock"
 spool_dir = "/tmp/btrfs_to_s3/spool"
-spool_size_bytes = 1024
+spool_size_bytes = 5242880
 
 [schedule]
 full_every_days = 180
@@ -47,7 +50,7 @@ log_level = "info"
 state_path = "/tmp/btrfs_to_s3/state.json"
 lock_path = "/tmp/btrfs_to_s3/lock"
 spool_dir = "/tmp/btrfs_to_s3/spool"
-spool_size_bytes = 1024
+spool_size_bytes = 5242880
 
 [schedule]
 full_every_days = 180
@@ -88,7 +91,7 @@ class ConfigTests(unittest.TestCase):
                 "state_path": "/tmp/btrfs_to_s3/state.json",
                 "lock_path": "/tmp/btrfs_to_s3/lock",
                 "spool_dir": "/tmp/btrfs_to_s3/spool",
-                "spool_size_bytes": 1024,
+                "spool_size_bytes": MIN_SPOOL_SIZE_BYTES,
             },
             "schedule": {
                 "full_every_days": 180,
@@ -128,7 +131,7 @@ class ConfigTests(unittest.TestCase):
                 "state_path": "/tmp/btrfs_to_s3/state.json",
                 "lock_path": "/tmp/btrfs_to_s3/lock",
                 "spool_dir": "/tmp/btrfs_to_s3/spool",
-                "spool_size_bytes": 1024,
+                "spool_size_bytes": MIN_SPOOL_SIZE_BYTES,
             },
             "schedule": {
                 "full_every_days": 180,
@@ -246,6 +249,27 @@ class ConfigTests(unittest.TestCase):
             path = Path(handle.name)
         with self.assertRaises(config_module.ConfigError):
             config_module.load_config(path)
+
+    def test_rejects_spool_size_below_minimum(self) -> None:
+        data = self._valid_data()
+        data["global"]["spool_size_bytes"] = MIN_SPOOL_SIZE_BYTES - 1
+
+        with self.assertRaisesRegex(
+            config_module.ConfigError,
+            r"global\.spool_size_bytes must be >= 5 MiB",
+        ):
+            config_module.Config.from_dict(data)
+
+    def test_accepts_spool_size_at_minimum(self) -> None:
+        data = self._valid_data()
+        data["global"]["spool_size_bytes"] = MIN_SPOOL_SIZE_BYTES
+
+        config = config_module.Config.from_dict(data)
+
+        self.assertEqual(
+            config.global_cfg.spool_size_bytes,
+            MIN_SPOOL_SIZE_BYTES,
+        )
 
     def test_rejects_invalid_cadence(self) -> None:
         toml = VALID_TOML.replace("full_every_days = 180", "full_every_days = 0")

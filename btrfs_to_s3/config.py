@@ -13,7 +13,9 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for 3.10
 
 TOMLDecodeError = tomllib.TOMLDecodeError
 
+MiB = 1024**2
 GiB = 1024**3
+MIN_SPOOL_SIZE_BYTES = 5 * MiB
 
 DEFAULT_LOG_LEVEL = "info"
 DEFAULT_STATE_PATH = "~/.local/state/btrfs_to_s3/state.json"
@@ -260,7 +262,8 @@ def validate_config(config: Config) -> None:
     _validate_path(config.global_cfg.state_path, "global.state_path")
     _validate_path(config.global_cfg.lock_path, "global.lock_path")
     _validate_path(config.global_cfg.spool_dir, "global.spool_dir")
-    _validate_positive(config.global_cfg.spool_size_bytes, "global.spool_size_bytes")
+    if config.global_cfg.spool_size_bytes < MIN_SPOOL_SIZE_BYTES:
+        raise ConfigError("global.spool_size_bytes must be >= 5 MiB")
 
     _validate_positive(config.schedule.full_every_days, "schedule.full_every_days")
     _validate_positive(
