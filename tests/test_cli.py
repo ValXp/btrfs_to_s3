@@ -162,7 +162,9 @@ class CliTests(unittest.TestCase):
             handle.write(CONFIG_TOML)
             path = Path(handle.name)
         buffer = io.StringIO()
-        with redirect_stdout(buffer):
+        with mock.patch.object(
+            BackupOrchestrator, "run", return_value=0
+        ), redirect_stdout(buffer):
             exit_code = cli.main(["backup", "--config", str(path)])
         self.assertEqual(exit_code, 0)
 
@@ -263,7 +265,7 @@ class CliTests(unittest.TestCase):
                 result = orchestrator.run(request)
             self.assertEqual(result, 0)
 
-    def test_backup_once_forces_run(self) -> None:
+    def test_backup_once_forces_run_and_requires_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)
             request = BackupRequest(
@@ -290,7 +292,7 @@ class CliTests(unittest.TestCase):
                     config, logger=logging.getLogger("btrfs_to_s3.cli")
                 )
                 result = orchestrator.run(request)
-            self.assertEqual(result, 0)
+            self.assertEqual(result, 1)
             self.assertTrue(creds_check.called)
 
     def test_backup_lock_contention_returns_error(self) -> None:

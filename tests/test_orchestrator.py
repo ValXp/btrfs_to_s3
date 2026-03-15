@@ -397,6 +397,84 @@ class OrchestratorBackupTests(unittest.TestCase):
                 )
             )
 
+    def test_backup_no_s3_skips_credentials_and_s3_client(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir)
+            request = BackupRequest(
+                dry_run=False,
+                source_names=None,
+                once=False,
+                no_s3=True,
+            )
+            backend = _make_backend(temp_dir)
+            with mock.patch.object(
+                BackupOrchestrator,
+                "_plan_work",
+                return_value=[(backend.sources[0], mock.Mock(), "full")],
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_get_backend",
+                return_value=backend,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_select_sources",
+                return_value=[backend.sources[0]],
+            ), mock.patch(
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                side_effect=AssertionError("credentials should not be checked"),
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_init_s3_client",
+                side_effect=AssertionError("s3 client should not be initialized"),
+            ):
+                orchestrator = BackupOrchestrator(config)
+                self.assertEqual(orchestrator._run_locked(request), 0)
+
+    def test_backup_requires_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir)
+            request = BackupRequest(
+                dry_run=False,
+                source_names=None,
+                once=False,
+                no_s3=False,
+            )
+            backend = _make_backend(temp_dir)
+            orchestrator = BackupOrchestrator(
+                config, logger=logging.getLogger("btrfs_to_s3.orchestrator_test")
+            )
+            with mock.patch.object(
+                BackupOrchestrator,
+                "_plan_work",
+                return_value=[(backend.sources[0], mock.Mock(), "full")],
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_get_backend",
+                return_value=backend,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_select_sources",
+                return_value=[backend.sources[0]],
+            ), mock.patch(
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=False,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_init_s3_client",
+                side_effect=AssertionError("s3 client should not be initialized"),
+            ):
+                with self.assertLogs(
+                    "btrfs_to_s3.orchestrator_test", level="ERROR"
+                ) as logs:
+                    result = orchestrator._run_locked(request)
+            self.assertEqual(result, 1)
+            self.assertTrue(
+                any(
+                    "event=backup_no_credentials" in entry
+                    for entry in logs.output
+                )
+            )
+
     def test_backup_run_returns_error_when_s3_client_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)

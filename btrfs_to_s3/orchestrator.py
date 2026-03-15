@@ -117,9 +117,13 @@ class BackupOrchestrator:
             self.logger.info("event=backup_not_due status=skipped")
             return 0
 
-        if request.no_s3 or not _has_aws_credentials():
+        if request.no_s3:
             self.logger.info("event=backup_no_s3 status=skipped")
             return 0
+
+        if not _has_aws_credentials():
+            self.logger.error("event=backup_no_credentials status=failed")
+            return 1
 
         client = self._init_s3_client()
         if client is None:
