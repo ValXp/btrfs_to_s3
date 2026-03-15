@@ -182,16 +182,63 @@ class OrchestratorHelperTests(unittest.TestCase):
             "backup/subvol/tank/data/",
         )
 
-    def test_has_aws_credentials_looks_for_profile_or_keys(self) -> None:
-        with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertFalse(_has_aws_credentials())
-        with mock.patch.dict("os.environ", {"AWS_PROFILE": "default"}):
-            self.assertTrue(_has_aws_credentials())
-        with mock.patch.dict(
-            "os.environ",
-            {"AWS_ACCESS_KEY_ID": "key", "AWS_SECRET_ACCESS_KEY": "secret"},
-        ):
-            self.assertTrue(_has_aws_credentials())
+    def test_has_aws_credentials_uses_boto3_provider_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "AWS_CONFIG_FILE": str(Path(temp_dir) / "missing-config"),
+                    "AWS_SHARED_CREDENTIALS_FILE": str(
+                        Path(temp_dir) / "missing-credentials"
+                    ),
+                    "AWS_EC2_METADATA_DISABLED": "true",
+                    "HOME": temp_dir,
+                },
+                clear=True,
+            ):
+                self.assertFalse(_has_aws_credentials())
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "AWS_ACCESS_KEY_ID": "key",
+                    "AWS_SECRET_ACCESS_KEY": "secret",
+                    "AWS_EC2_METADATA_DISABLED": "true",
+                    "HOME": temp_dir,
+                },
+                clear=True,
+            ):
+                self.assertTrue(_has_aws_credentials())
+            credentials_path = Path(temp_dir) / "credentials"
+            credentials_path.write_text(
+                "[default]\n"
+                "aws_access_key_id = file-key\n"
+                "aws_secret_access_key = file-secret\n"
+                "[named]\n"
+                "aws_access_key_id = profile-key\n"
+                "aws_secret_access_key = profile-secret\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "AWS_SHARED_CREDENTIALS_FILE": str(credentials_path),
+                    "AWS_EC2_METADATA_DISABLED": "true",
+                    "HOME": temp_dir,
+                },
+                clear=True,
+            ):
+                self.assertTrue(_has_aws_credentials())
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "AWS_PROFILE": "named",
+                    "AWS_SHARED_CREDENTIALS_FILE": str(credentials_path),
+                    "AWS_EC2_METADATA_DISABLED": "true",
+                    "HOME": temp_dir,
+                },
+                clear=True,
+            ):
+                self.assertTrue(_has_aws_credentials())
 
     def test_get_s3_client_requires_boto3(self) -> None:
         real_import = __import__

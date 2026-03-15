@@ -76,7 +76,7 @@ unavailable, it creates a temporary clone of the source snapshot under
 `zfs.receive_parent_dataset`, verifies against that clone, and removes it
 afterward.
 
-AWS credentials are detected via `AWS_PROFILE` or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
+AWS credentials are resolved via boto3's standard provider chain, including env vars, shared credentials files, profiles, IAM roles, web identity, and ECS/EC2 metadata.
 
 ## Configuration
 

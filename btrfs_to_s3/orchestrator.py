@@ -137,7 +137,12 @@ class BackupOrchestrator:
             )
             return 0
 
-        if not _has_aws_credentials():
+        try:
+            has_credentials = _has_aws_credentials()
+        except RuntimeError as exc:
+            self.logger.error("event=backup_s3_client_failed error=%s", exc)
+            return 1
+        if not has_credentials:
             self.logger.error("event=backup_no_credentials status=failed")
             return 1
 
@@ -581,7 +586,12 @@ class RestoreOrchestrator:
         if backend is None:
             return 1
 
-        if not _has_aws_credentials():
+        try:
+            has_credentials = _has_aws_credentials()
+        except RuntimeError as exc:
+            self.logger.error("event=restore_s3_client_failed error=%s", exc)
+            return 1
+        if not has_credentials:
             self.logger.error("event=restore_no_credentials status=failed")
             return 1
 
@@ -880,11 +890,16 @@ def _source_object_prefix(prefix: str, source_name: str) -> str:
 
 
 def _has_aws_credentials() -> bool:
-    if os.environ.get("AWS_PROFILE"):
-        return True
-    access_key = os.environ.get("AWS_ACCESS_KEY_ID")
-    secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-    return bool(access_key and secret_key)
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError
+    except ImportError as exc:
+        raise RuntimeError("boto3 is required for S3 operations") from exc
+
+    try:
+        return boto3.Session().get_credentials() is not None
+    except BotoCoreError:
+        return False
 
 
 def _get_s3_client(region: str):
