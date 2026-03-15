@@ -299,6 +299,28 @@ class RestoreTests(unittest.TestCase):
 
         self.assertEqual(result, "snap/manifest.json")
 
+    def test_fetch_json_closes_body_after_read(self) -> None:
+        client = FakeS3()
+        body = FakeBody(
+            json.dumps({"manifest_key": "snap/manifest.json"}).encode("utf-8")
+        )
+        client.objects["current.json"] = body
+
+        payload = restore._fetch_json(client, "bucket", "current.json")
+
+        self.assertEqual(payload["manifest_key"], "snap/manifest.json")
+        self.assertTrue(body.closed)
+
+    def test_fetch_json_closes_body_on_parse_error(self) -> None:
+        client = FakeS3()
+        body = FakeBody(b"{not json")
+        client.objects["bad.json"] = body
+
+        with self.assertRaises(restore.RestoreError):
+            restore._fetch_json(client, "bucket", "bad.json")
+
+        self.assertTrue(body.closed)
+
     def test_fetch_current_manifest_key_waits_for_archived_pointer(self) -> None:
         client = FakeS3()
         client.objects["current.json"] = json.dumps(

@@ -515,9 +515,18 @@ def _fetch_json(
         raise RestoreError(f"missing object {key}") from exc
     except Exception as exc:  # noqa: BLE001 - surface key errors
         raise RestoreError(f"missing object {key}") from exc
-    body = response["Body"].read()
+    body = response["Body"]
     try:
-        payload = json.loads(body)
+        payload_bytes = body.read()
+    finally:
+        close = getattr(body, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+    try:
+        payload = json.loads(payload_bytes)
     except json.JSONDecodeError as exc:
         raise RestoreError(f"{key} invalid json") from exc
     if not isinstance(payload, dict):
