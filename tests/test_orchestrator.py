@@ -540,6 +540,53 @@ class OrchestratorBackupTests(unittest.TestCase):
                 )
             )
 
+    def test_backup_state_load_failure_is_logged_and_returns_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir)
+            config.global_cfg.state_path.write_text(
+                "{bad json\n",
+                encoding="utf-8",
+            )
+            orchestrator = BackupOrchestrator(
+                config, logger=logging.getLogger("btrfs_to_s3.orchestrator_test")
+            )
+            request = BackupRequest(
+                dry_run=False,
+                source_names=None,
+                once=False,
+                no_s3=True,
+            )
+            backend = _make_backend(temp_dir)
+
+            with mock.patch.object(
+                BackupOrchestrator,
+                "_get_backend",
+                return_value=backend,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_select_sources",
+                side_effect=AssertionError(
+                    "source selection should not run"
+                ),
+            ), self.assertLogs(
+                "btrfs_to_s3.orchestrator_test", level="ERROR"
+            ) as logs:
+                result = orchestrator._run_locked(request)
+
+            self.assertEqual(result, 1)
+            self.assertTrue(
+                any(
+                    "event=backup_state_load_failed" in entry
+                    for entry in logs.output
+                )
+            )
+            self.assertTrue(
+                any(
+                    str(config.global_cfg.state_path) in entry
+                    for entry in logs.output
+                )
+            )
+
     def test_backup_fails_when_any_requested_source_is_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = (

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from btrfs_to_s3.state import (
     SourceState,
     State,
+    StateLoadError,
     SubvolumeState,
     load_state,
     save_state,
@@ -43,6 +46,33 @@ class StateTests(unittest.TestCase):
             path = Path(temp_dir) / "missing.json"
             state = load_state(path)
             self.assertEqual(state, State())
+
+    def test_invalid_json_raises_state_load_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "state.json"
+            path.write_text("{bad json\n", encoding="utf-8")
+
+            with self.assertRaises(StateLoadError) as exc_info:
+                load_state(path)
+
+        self.assertIn(str(path), str(exc_info.exception))
+        self.assertIsInstance(exc_info.exception.__cause__, json.JSONDecodeError)
+
+    def test_read_error_raises_state_load_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "state.json"
+            path.write_text("{}\n", encoding="utf-8")
+
+            with mock.patch.object(
+                Path,
+                "open",
+                side_effect=OSError("permission denied"),
+            ):
+                with self.assertRaises(StateLoadError) as exc_info:
+                    load_state(path)
+
+        self.assertIn(str(path), str(exc_info.exception))
+        self.assertIsInstance(exc_info.exception.__cause__, OSError)
 
     def test_legacy_state_derives_snapshot_name_and_path(self) -> None:
         state = State.from_dict(

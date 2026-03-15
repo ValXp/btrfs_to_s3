@@ -41,7 +41,13 @@ from btrfs_to_s3.restore import (
     validate_manifest_chain,
     verify_restore,
 )
-from btrfs_to_s3.state import SourceState, State, load_state, save_state
+from btrfs_to_s3.state import (
+    SourceState,
+    State,
+    StateLoadError,
+    load_state,
+    save_state,
+)
 from btrfs_to_s3.uploader import S3Uploader
 
 
@@ -103,7 +109,14 @@ class BackupOrchestrator:
         if backend is None:
             return 1
 
-        state = load_state(self.config.global_cfg.state_path)
+        try:
+            state = load_state(self.config.global_cfg.state_path)
+        except StateLoadError as exc:
+            self.logger.error(
+                "event=backup_state_load_failed error=%s",
+                exc,
+            )
+            return 1
         state_sources = dict(state.sources)
         try:
             selected = self._select_sources(

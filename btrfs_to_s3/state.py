@@ -14,6 +14,10 @@ from pathlib import Path
 from typing import Any
 
 
+class StateLoadError(RuntimeError):
+    """Raised when a persisted state file cannot be read or parsed."""
+
+
 @dataclass(frozen=True)
 class SourceState:
     # last_snapshot stores the backend-specific snapshot identity.
@@ -116,11 +120,25 @@ class State:
 
 
 def load_state(path: Path) -> State:
-    if not path.exists():
-        return State()
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    return State.from_dict(data)
+    try:
+        if not path.exists():
+            return State()
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise StateLoadError(
+            f"failed to parse state file {path}: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise StateLoadError(
+            f"failed to read state file {path}: {exc}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise StateLoadError(f"state file {path} must be a JSON object")
+    try:
+        return State.from_dict(data)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise StateLoadError(f"invalid state file {path}: {exc}") from exc
 
 
 def save_state(path: Path, state: State) -> None:
