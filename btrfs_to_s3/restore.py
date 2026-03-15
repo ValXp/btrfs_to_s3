@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, IO
 
+from botocore.exceptions import ClientError
+
 from btrfs_to_s3.filesystems.base import RestoreBackendError, RestoreOperations
 from btrfs_to_s3.filesystems.btrfs import BtrfsRestoreOperations
 
@@ -62,6 +64,12 @@ def is_restore_ready(restore_header: str | None) -> bool:
     if 'ongoing-request="true"' in lowered:
         return False
     return False
+
+
+def is_restore_in_progress(restore_header: str | None) -> bool:
+    if not restore_header:
+        return False
+    return 'ongoing-request="true"' in restore_header.lower()
 
 
 def fetch_current_manifest_key(
@@ -184,17 +192,29 @@ def ensure_chunks_restored(
     if not needs_restore(storage_class):
         return
     keys = [chunk.key for chunk in chunks]
+    pending: set[str] = set()
     for key in keys:
-        client.restore_object(
-            Bucket=bucket,
-            Key=key,
-            RestoreRequest={
-                "Days": 1,
-                "GlacierJobParameters": {"Tier": restore_tier},
-            },
-        )
+        response = client.head_object(Bucket=bucket, Key=key)
+        restore_header = response.get("Restore")
+        if is_restore_ready(restore_header):
+            continue
+        if is_restore_in_progress(restore_header):
+            pending.add(key)
+            continue
+        try:
+            client.restore_object(
+                Bucket=bucket,
+                Key=key,
+                RestoreRequest={
+                    "Days": 1,
+                    "GlacierJobParameters": {"Tier": restore_tier},
+                },
+            )
+        except ClientError as exc:
+            if not _is_restore_already_in_progress(exc):
+                raise
+        pending.add(key)
     deadline = time_fn() + timeout_seconds
-    pending = set(keys)
     delay = 1.0
     while pending:
         now = time_fn()
@@ -209,6 +229,12 @@ def ensure_chunks_restored(
             jitter = random.random() * 0.1 * delay
             sleep(delay + jitter)
             delay = min(delay * 2.0, 30.0)
+
+
+def _is_restore_already_in_progress(exc: ClientError) -> bool:
+    response = getattr(exc, "response", {})
+    error = response.get("Error", {})
+    return error.get("Code") == "RestoreAlreadyInProgress"
 
 
 def download_and_verify_chunks(

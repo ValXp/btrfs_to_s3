@@ -11,6 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from botocore.exceptions import ClientError
+
 from btrfs_to_s3 import restore
 from btrfs_to_s3.filesystems.base import ReceiveStream, RestoreBackendError
 
@@ -36,6 +38,7 @@ class FakeS3:
         self.objects: dict[str, bytes] = {}
         self.restore_requests: list[str] = []
         self.restore_headers: dict[str, list[str | None]] = {}
+        self.restore_exceptions: dict[str, list[Exception]] = {}
 
     def get_object(self, Bucket: str, Key: str) -> dict[str, object]:
         if Key not in self.objects:
@@ -57,7 +60,23 @@ class FakeS3:
     def restore_object(self, Bucket: str, Key: str, RestoreRequest: dict) -> None:
         if Key not in self.objects:
             raise KeyError(Key)
+        exceptions = self.restore_exceptions.get(Key)
+        if exceptions:
+            exc = exceptions.pop(0)
+            raise exc
         self.restore_requests.append(Key)
+
+
+def _client_error(code: str) -> ClientError:
+    return ClientError(
+        {
+            "Error": {
+                "Code": code,
+                "Message": code,
+            }
+        },
+        "RestoreObject",
+    )
 
 
 class RestoreTests(unittest.TestCase):
@@ -183,6 +202,9 @@ class RestoreTests(unittest.TestCase):
         self.assertTrue(restore.is_restore_ready(header_ready))
         self.assertFalse(restore.is_restore_ready(header_pending))
         self.assertFalse(restore.is_restore_ready(None))
+        self.assertTrue(restore.is_restore_in_progress(header_pending))
+        self.assertFalse(restore.is_restore_in_progress(header_ready))
+        self.assertFalse(restore.is_restore_in_progress(None))
 
     def test_restore_timeout_raises(self) -> None:
         client = FakeS3()
@@ -553,7 +575,55 @@ class RestoreTests(unittest.TestCase):
             time_fn=lambda: 0.0,
         )
 
-        self.assertEqual(client.restore_requests, ["chunk.bin"])
+        self.assertEqual(client.restore_requests, [])
+
+    def test_ensure_chunks_restored_waits_for_existing_restore(self) -> None:
+        client = FakeS3()
+        client.objects["chunk.bin"] = b"payload"
+        client.restore_headers["chunk.bin"] = [
+            'ongoing-request="true"',
+            'ongoing-request="false", expiry-date="Tue, 01 Jan 2030 00:00:00 GMT"',
+        ]
+        chunk = restore.ChunkInfo(key="chunk.bin", sha256="x", size=None)
+
+        restore.ensure_chunks_restored(
+            client,
+            "bucket",
+            [chunk],
+            storage_class="GLACIER",
+            restore_tier="Standard",
+            timeout_seconds=1,
+            sleep=lambda _: None,
+            time_fn=lambda: 0.0,
+        )
+
+        self.assertEqual(client.restore_requests, [])
+
+    def test_ensure_chunks_restored_handles_restore_start_race(self) -> None:
+        client = FakeS3()
+        client.objects["chunk.bin"] = b"payload"
+        client.restore_headers["chunk.bin"] = [
+            None,
+            'ongoing-request="true"',
+            'ongoing-request="false", expiry-date="Tue, 01 Jan 2030 00:00:00 GMT"',
+        ]
+        client.restore_exceptions["chunk.bin"] = [
+            _client_error("RestoreAlreadyInProgress")
+        ]
+        chunk = restore.ChunkInfo(key="chunk.bin", sha256="x", size=None)
+
+        restore.ensure_chunks_restored(
+            client,
+            "bucket",
+            [chunk],
+            storage_class="GLACIER",
+            restore_tier="Standard",
+            timeout_seconds=1,
+            sleep=lambda _: None,
+            time_fn=lambda: 0.0,
+        )
+
+        self.assertEqual(client.restore_requests, [])
 
     def test_stream_failure_cleans_up_receive(self) -> None:
         client = FakeS3()
