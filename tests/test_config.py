@@ -203,6 +203,42 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(config_module.ConfigError):
             config_module.load_config(path)
 
+    def test_rejects_duplicate_btrfs_source_identifiers(self) -> None:
+        data = self._valid_data()
+        data["subvolumes"] = {
+            "paths": ["/srv/primary/data", "/srv/archive/data"]
+        }
+
+        with self.assertRaises(config_module.ConfigError) as context:
+            config_module.Config.from_dict(data)
+
+        self.assertIn(
+            "duplicate source identifiers in subvolumes.paths",
+            str(context.exception),
+        )
+        self.assertIn("data", str(context.exception))
+
+    def test_rejects_duplicate_zfs_source_identifiers_after_normalization(
+        self,
+    ) -> None:
+        data = self._valid_zfs_data()
+        data["zfs"] = {
+            "pool_name": "tank",
+            "mount_root": "/tank",
+            "source_datasets": ["data", "tank/data"],
+            "receive_parent_dataset": "tank/restore",
+            "snapshot_prefix": "btrfs-to-s3",
+        }
+
+        with self.assertRaises(config_module.ConfigError) as context:
+            config_module.Config.from_dict(data)
+
+        self.assertIn(
+            "duplicate source identifiers in zfs.source_datasets",
+            str(context.exception),
+        )
+        self.assertIn("tank/data", str(context.exception))
+
     def test_rejects_invalid_chunk_size(self) -> None:
         toml = VALID_TOML.replace("chunk_size_bytes = 2048", "chunk_size_bytes = 0")
         with tempfile.NamedTemporaryFile("w", delete=False) as handle:

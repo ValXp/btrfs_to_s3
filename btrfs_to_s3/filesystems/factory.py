@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from btrfs_to_s3.config import Config
+from btrfs_to_s3.config import Config, qualify_zfs_dataset
 from btrfs_to_s3.filesystems.base import (
     CommandRunner,
     RestoreOperations,
@@ -53,12 +53,14 @@ def create_filesystem_backend(
 ) -> FilesystemBackend:
     backend = config.filesystem.backend
     if backend == "btrfs":
+        sources = tuple(
+            BackupSource(identifier=path.name, path=path)
+            for path in config.subvolumes.paths
+        )
+        _ensure_unique_source_identifiers(sources)
         return FilesystemBackend(
             name="btrfs",
-            sources=tuple(
-                BackupSource(identifier=path.name, path=path)
-                for path in config.subvolumes.paths
-            ),
+            sources=sources,
             snapshot_operations=snapshot_operations
             or BtrfsSnapshotManager(config.snapshots.base_dir, runner),
             send_operations=send_operations or BtrfsSendOperations(),
@@ -69,26 +71,28 @@ def create_filesystem_backend(
             raise BackendSelectionError("missing zfs configuration")
         pool_name = config.zfs.pool_name
         source_datasets = tuple(
-            _qualify_dataset(pool_name, dataset)
+            qualify_zfs_dataset(pool_name, dataset)
             for dataset in config.zfs.source_datasets
         )
-        receive_parent_dataset = _qualify_dataset(
+        receive_parent_dataset = qualify_zfs_dataset(
             pool_name,
             config.zfs.receive_parent_dataset,
         )
+        sources = tuple(
+            BackupSource(
+                identifier=dataset,
+                path=_dataset_mount_path(
+                    config.zfs.mount_root,
+                    pool_name,
+                    dataset,
+                ),
+            )
+            for dataset in source_datasets
+        )
+        _ensure_unique_source_identifiers(sources)
         return FilesystemBackend(
             name="zfs",
-            sources=tuple(
-                BackupSource(
-                    identifier=dataset,
-                    path=_dataset_mount_path(
-                        config.zfs.mount_root,
-                        pool_name,
-                        dataset,
-                    ),
-                )
-                for dataset in source_datasets
-            ),
+            sources=sources,
             snapshot_operations=snapshot_operations
             or ZFSSnapshotManager(
                 snapshot_prefix=config.zfs.snapshot_prefix,
@@ -109,9 +113,7 @@ def create_filesystem_backend(
 
 
 def _qualify_dataset(pool_name: str, dataset: str) -> str:
-    if dataset == pool_name or dataset.startswith(pool_name + "/"):
-        return dataset
-    return f"{pool_name}/{dataset}"
+    return qualify_zfs_dataset(pool_name, dataset)
 
 
 def _dataset_mount_path(mount_root: Path, pool_name: str, dataset: str) -> Path:
@@ -119,3 +121,20 @@ def _dataset_mount_path(mount_root: Path, pool_name: str, dataset: str) -> Path:
     if qualified == pool_name:
         return mount_root
     return mount_root / qualified[len(pool_name) + 1 :]
+
+
+def _ensure_unique_source_identifiers(
+    sources: tuple[BackupSource, ...],
+) -> None:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for source in sources:
+        if source.identifier in seen and source.identifier not in duplicates:
+            duplicates.append(source.identifier)
+            continue
+        seen.add(source.identifier)
+    if duplicates:
+        raise BackendSelectionError(
+            "duplicate source identifiers are not allowed: "
+            + ", ".join(duplicates)
+        )

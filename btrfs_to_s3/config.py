@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 try:
     import tomllib
@@ -281,6 +281,7 @@ def validate_config(config: Config) -> None:
             )
         for path in config.subvolumes.paths:
             _validate_path(path, "subvolumes.paths")
+        _validate_unique_btrfs_source_identifiers(config.subvolumes.paths)
     elif config.zfs is None:
         raise ConfigError(
             'zfs section is required when filesystem.backend = "zfs"'
@@ -441,7 +442,51 @@ def _validate_zfs_config(config: ZFSConfig) -> None:
         raise ConfigError("zfs.pool_name is required")
     if not config.source_datasets:
         raise ConfigError("zfs.source_datasets must include at least one dataset")
+    _validate_unique_zfs_source_identifiers(
+        config.pool_name,
+        config.source_datasets,
+    )
     if not config.receive_parent_dataset:
         raise ConfigError("zfs.receive_parent_dataset is required")
     if not config.snapshot_prefix:
         raise ConfigError("zfs.snapshot_prefix is required")
+
+
+def qualify_zfs_dataset(pool_name: str, dataset: str) -> str:
+    if dataset == pool_name or dataset.startswith(pool_name + "/"):
+        return dataset
+    return f"{pool_name}/{dataset}"
+
+
+def _validate_unique_btrfs_source_identifiers(paths: tuple[Path, ...]) -> None:
+    duplicates = _duplicate_identifiers(path.name for path in paths)
+    if duplicates:
+        raise ConfigError(
+            "duplicate source identifiers in subvolumes.paths: "
+            + ", ".join(duplicates)
+        )
+
+
+def _validate_unique_zfs_source_identifiers(
+    pool_name: str,
+    datasets: tuple[str, ...],
+) -> None:
+    duplicates = _duplicate_identifiers(
+        qualify_zfs_dataset(pool_name, dataset) for dataset in datasets
+    )
+    if duplicates:
+        raise ConfigError(
+            "duplicate source identifiers in zfs.source_datasets after pool-name normalization: "
+            + ", ".join(duplicates)
+        )
+
+
+def _duplicate_identifiers(values: Iterable[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for value in values:
+        if value in seen and value not in duplicates:
+            duplicates.append(value)
+            continue
+        seen.add(value)
+    return tuple(duplicates)
