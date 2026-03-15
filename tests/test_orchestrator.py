@@ -1351,6 +1351,77 @@ class OrchestratorRestoreTests(unittest.TestCase):
             ):
                 self.assertEqual(orchestrator.run(request), 1)
 
+    def test_restore_passes_archive_restore_settings_to_metadata_fetches(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir)
+            backend = _make_backend(temp_dir)
+            request = RestoreRequest(
+                source_name="data",
+                target=Path(temp_dir) / "restore",
+                manifest_key=None,
+                restore_timeout=123,
+                wait_restore=False,
+                verify="none",
+            )
+            client = object()
+            current_key = (
+                f"{_source_object_prefix(_build_prefix(config.s3.prefix), 'data')}"
+                "current.json"
+            )
+            manifests = [
+                ManifestInfo(
+                    key="manifest.json",
+                    kind="full",
+                    parent_manifest=None,
+                    chunks=(),
+                    s3={},
+                    snapshot_path=None,
+                    source_name="data",
+                )
+            ]
+            orchestrator = RestoreOrchestrator(
+                config,
+                backend_factory=lambda config, runner: backend,
+            )
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_init_s3_client",
+                return_value=client,
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_fetch_manifest_key",
+                return_value="manifest.json",
+            ) as fetch_manifest_key, mock.patch.object(
+                RestoreOrchestrator,
+                "_resolve_chain",
+                return_value=manifests,
+            ) as resolve_chain, mock.patch(
+                "btrfs_to_s3.orchestrator.restore_chain",
+                return_value=0,
+            ):
+                self.assertEqual(orchestrator.run(request), 0)
+
+            fetch_manifest_key.assert_called_once_with(
+                client,
+                current_key,
+                wait_for_restore=False,
+                restore_tier=config.restore.restore_tier,
+                restore_timeout_seconds=123,
+            )
+            resolve_chain.assert_called_once_with(
+                client,
+                "manifest.json",
+                wait_for_restore=False,
+                restore_tier=config.restore.restore_tier,
+                restore_timeout_seconds=123,
+            )
+
     def test_restore_resolve_chain_failure_returns_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)
@@ -1545,7 +1616,11 @@ class OrchestratorRestoreTests(unittest.TestCase):
                     ):
                         self.assertIsNone(
                             orchestrator._fetch_manifest_key(
-                                object(), "current.json"
+                                object(),
+                                "current.json",
+                                wait_for_restore=True,
+                                restore_tier="Standard",
+                                restore_timeout_seconds=1,
                             )
                         )
 
@@ -1567,8 +1642,81 @@ class OrchestratorRestoreTests(unittest.TestCase):
                         "btrfs_to_s3.orchestrator_test", level="ERROR"
                     ):
                         self.assertIsNone(
-                            orchestrator._resolve_chain(object(), "manifest.json")
+                            orchestrator._resolve_chain(
+                                object(),
+                                "manifest.json",
+                                wait_for_restore=True,
+                                restore_tier="Standard",
+                                restore_timeout_seconds=1,
+                            )
                         )
+
+    def test_restore_fetch_manifest_key_passes_restore_options(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir)
+            orchestrator = RestoreOrchestrator(config)
+            client = object()
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.fetch_current_manifest_key",
+                return_value="manifest.json",
+            ) as fetch_manifest_key:
+                result = orchestrator._fetch_manifest_key(
+                    client,
+                    "current.json",
+                    wait_for_restore=True,
+                    restore_tier="Bulk",
+                    restore_timeout_seconds=42,
+                )
+
+            self.assertEqual(result, "manifest.json")
+            fetch_manifest_key.assert_called_once_with(
+                client,
+                config.s3.bucket,
+                "current.json",
+                wait_for_restore=True,
+                restore_tier="Bulk",
+                timeout_seconds=42,
+            )
+
+    def test_restore_resolve_chain_passes_restore_options(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir)
+            orchestrator = RestoreOrchestrator(config)
+            client = object()
+            manifests = [
+                ManifestInfo(
+                    key="manifest.json",
+                    kind="full",
+                    parent_manifest=None,
+                    chunks=(),
+                    s3={},
+                    snapshot_path=None,
+                    source_name="data",
+                )
+            ]
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.resolve_manifest_chain",
+                return_value=manifests,
+            ) as resolve_chain:
+                result = orchestrator._resolve_chain(
+                    client,
+                    "manifest.json",
+                    wait_for_restore=True,
+                    restore_tier="Bulk",
+                    restore_timeout_seconds=42,
+                )
+
+            self.assertEqual(result, manifests)
+            resolve_chain.assert_called_once_with(
+                client,
+                config.s3.bucket,
+                "manifest.json",
+                wait_for_restore=True,
+                restore_tier="Bulk",
+                timeout_seconds=42,
+            )
 
     def test_verify_restore_logs_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

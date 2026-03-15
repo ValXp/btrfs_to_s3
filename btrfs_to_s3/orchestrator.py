@@ -589,17 +589,39 @@ class RestoreOrchestrator:
         if client is None:
             return 1
 
+        wait_restore = (
+            request.wait_restore
+            if request.wait_restore is not None
+            else self.config.restore.wait_for_restore
+        )
+        restore_timeout = (
+            request.restore_timeout
+            if request.restore_timeout is not None
+            else self.config.restore.restore_timeout_seconds
+        )
         prefix = _build_prefix(self.config.s3.prefix)
         current_key = (
             f"{_source_object_prefix(prefix, request.source_name)}current.json"
         )
         manifest_key = request.manifest_key
         if not manifest_key:
-            manifest_key = self._fetch_manifest_key(client, current_key)
+            manifest_key = self._fetch_manifest_key(
+                client,
+                current_key,
+                wait_for_restore=wait_restore,
+                restore_tier=self.config.restore.restore_tier,
+                restore_timeout_seconds=restore_timeout,
+            )
             if manifest_key is None:
                 return 1
 
-        manifests = self._resolve_chain(client, manifest_key)
+        manifests = self._resolve_chain(
+            client,
+            manifest_key,
+            wait_for_restore=wait_restore,
+            restore_tier=self.config.restore.restore_tier,
+            restore_timeout_seconds=restore_timeout,
+        )
         if manifests is None:
             return 1
         try:
@@ -612,16 +634,6 @@ class RestoreOrchestrator:
             self.logger.error("event=restore_manifest_failed error=%s", exc)
             return 1
 
-        wait_restore = (
-            request.wait_restore
-            if request.wait_restore is not None
-            else self.config.restore.wait_for_restore
-        )
-        restore_timeout = (
-            request.restore_timeout
-            if request.restore_timeout is not None
-            else self.config.restore.restore_timeout_seconds
-        )
         start_time = time.monotonic()
         try:
             total_bytes = restore_chain(
@@ -679,19 +691,45 @@ class RestoreOrchestrator:
             self.logger.error("event=restore_s3_client_failed error=%s", exc)
             return None
 
-    def _fetch_manifest_key(self, client, current_key: str) -> str | None:
+    def _fetch_manifest_key(
+        self,
+        client,
+        current_key: str,
+        *,
+        wait_for_restore: bool,
+        restore_tier: str,
+        restore_timeout_seconds: int,
+    ) -> str | None:
         try:
             return fetch_current_manifest_key(
-                client, self.config.s3.bucket, current_key
+                client,
+                self.config.s3.bucket,
+                current_key,
+                wait_for_restore=wait_for_restore,
+                restore_tier=restore_tier,
+                timeout_seconds=restore_timeout_seconds,
             )
         except RestoreError as exc:
             self.logger.error("event=restore_current_failed error=%s", exc)
             return None
 
-    def _resolve_chain(self, client, manifest_key: str):
+    def _resolve_chain(
+        self,
+        client,
+        manifest_key: str,
+        *,
+        wait_for_restore: bool,
+        restore_tier: str,
+        restore_timeout_seconds: int,
+    ):
         try:
             return resolve_manifest_chain(
-                client, self.config.s3.bucket, manifest_key
+                client,
+                self.config.s3.bucket,
+                manifest_key,
+                wait_for_restore=wait_for_restore,
+                restore_tier=restore_tier,
+                timeout_seconds=restore_timeout_seconds,
             )
         except RestoreError as exc:
             self.logger.error("event=restore_manifest_failed error=%s", exc)

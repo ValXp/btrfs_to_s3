@@ -39,10 +39,19 @@ class FakeS3:
         self.restore_requests: list[str] = []
         self.restore_headers: dict[str, list[str | None]] = {}
         self.restore_exceptions: dict[str, list[Exception]] = {}
+        self.storage_classes: dict[str, str] = {}
+        self.last_restore_headers: dict[str, str | None] = {}
 
     def get_object(self, Bucket: str, Key: str) -> dict[str, object]:
         if Key not in self.objects:
             raise KeyError(Key)
+        storage_class = self.storage_classes.get(Key)
+        restore_header = self.last_restore_headers.get(Key)
+        if (
+            restore.needs_restore(storage_class)
+            and not restore.is_restore_ready(restore_header)
+        ):
+            raise _client_error("InvalidObjectState")
         payload = self.objects[Key]
         if isinstance(payload, FakeBody):
             return {"Body": payload}
@@ -55,7 +64,12 @@ class FakeS3:
         header = headers[0]
         if len(headers) > 1:
             headers.pop(0)
-        return {"Restore": header}
+        self.last_restore_headers[Key] = header
+        response: dict[str, object] = {"Restore": header}
+        storage_class = self.storage_classes.get(Key)
+        if storage_class is not None:
+            response["StorageClass"] = storage_class
+        return response
 
     def restore_object(self, Bucket: str, Key: str, RestoreRequest: dict) -> None:
         if Key not in self.objects:
@@ -193,7 +207,7 @@ class RestoreTests(unittest.TestCase):
     def test_restore_header_parsing(self) -> None:
         self.assertTrue(restore.needs_restore("GLACIER"))
         self.assertTrue(restore.needs_restore("DEEP_ARCHIVE"))
-        self.assertTrue(restore.needs_restore("GLACIER_IR"))
+        self.assertFalse(restore.needs_restore("GLACIER_IR"))
         self.assertFalse(restore.needs_restore("STANDARD"))
         self.assertFalse(restore.needs_restore("STANDARD_IA"))
 
@@ -281,6 +295,29 @@ class RestoreTests(unittest.TestCase):
 
         self.assertEqual(result, "snap/manifest.json")
 
+    def test_fetch_current_manifest_key_waits_for_archived_pointer(self) -> None:
+        client = FakeS3()
+        client.objects["current.json"] = json.dumps(
+            {"manifest_key": "snap/manifest.json"}
+        ).encode("utf-8")
+        client.storage_classes["current.json"] = "GLACIER"
+        client.restore_headers["current.json"] = [
+            None,
+            'ongoing-request="false", expiry-date="Tue, 01 Jan 2030 00:00:00 GMT"',
+        ]
+
+        result = restore.fetch_current_manifest_key(
+            client,
+            "bucket",
+            "current.json",
+            wait_for_restore=True,
+            restore_tier="Standard",
+            timeout_seconds=1,
+        )
+
+        self.assertEqual(result, "snap/manifest.json")
+        self.assertEqual(client.restore_requests, ["current.json"])
+
     def test_fetch_current_manifest_key_missing(self) -> None:
         client = FakeS3()
         client.objects["current.json"] = json.dumps({}).encode("utf-8")
@@ -290,6 +327,22 @@ class RestoreTests(unittest.TestCase):
                 client, "bucket", "current.json"
             )
         self.assertIn("manifest_key", str(context.exception))
+
+    def test_fetch_current_manifest_key_reports_archived_pointer_without_wait(
+        self,
+    ) -> None:
+        client = FakeS3()
+        client.objects["current.json"] = json.dumps(
+            {"manifest_key": "snap/manifest.json"}
+        ).encode("utf-8")
+        client.storage_classes["current.json"] = "GLACIER"
+
+        with self.assertRaises(restore.RestoreError) as context:
+            restore.fetch_current_manifest_key(
+                client, "bucket", "current.json"
+            )
+
+        self.assertIn("archival", str(context.exception))
 
     def test_fetch_json_errors(self) -> None:
         client = FakeS3()
@@ -306,6 +359,61 @@ class RestoreTests(unittest.TestCase):
         with self.assertRaises(restore.RestoreError) as context:
             restore._fetch_json(client, "bucket", "missing.json")
         self.assertIn("missing object", str(context.exception))
+
+    def test_resolve_manifest_chain_waits_for_archived_manifests(self) -> None:
+        client = FakeS3()
+        full_manifest = {
+            "subvolume": "data",
+            "kind": "full",
+            "parent_manifest": None,
+            "chunks": [
+                {"key": "full/chunk.bin", "sha256": "abc", "size": 1}
+            ],
+            "s3": {"storage_class": "STANDARD"},
+        }
+        inc_manifest = {
+            "subvolume": "data",
+            "kind": "inc",
+            "parent_manifest": "full/manifest.json",
+            "chunks": [
+                {"key": "inc/chunk.bin", "sha256": "def", "size": 1}
+            ],
+            "s3": {"storage_class": "STANDARD"},
+        }
+        client.objects["full/manifest.json"] = json.dumps(full_manifest).encode(
+            "utf-8"
+        )
+        client.objects["inc/manifest.json"] = json.dumps(inc_manifest).encode(
+            "utf-8"
+        )
+        client.storage_classes["full/manifest.json"] = "DEEP_ARCHIVE"
+        client.storage_classes["inc/manifest.json"] = "GLACIER"
+        client.restore_headers["full/manifest.json"] = [
+            None,
+            'ongoing-request="false", expiry-date="Tue, 01 Jan 2030 00:00:00 GMT"',
+        ]
+        client.restore_headers["inc/manifest.json"] = [
+            None,
+            'ongoing-request="false", expiry-date="Tue, 01 Jan 2030 00:00:00 GMT"',
+        ]
+
+        manifests = restore.resolve_manifest_chain(
+            client,
+            "bucket",
+            "inc/manifest.json",
+            wait_for_restore=True,
+            restore_tier="Standard",
+            timeout_seconds=1,
+        )
+
+        self.assertEqual(
+            [manifest.key for manifest in manifests],
+            ["full/manifest.json", "inc/manifest.json"],
+        )
+        self.assertEqual(
+            client.restore_requests,
+            ["inc/manifest.json", "full/manifest.json"],
+        )
 
     def test_parse_manifest_errors(self) -> None:
         with self.assertRaises(restore.RestoreError):

@@ -17,7 +17,7 @@ from botocore.exceptions import ClientError
 from btrfs_to_s3.filesystems.base import RestoreBackendError, RestoreOperations
 from btrfs_to_s3.filesystems.btrfs import BtrfsRestoreOperations
 
-ARCHIVAL_STORAGE_CLASSES = {"GLACIER", "DEEP_ARCHIVE", "GLACIER_IR"}
+ARCHIVAL_STORAGE_CLASSES = {"GLACIER", "DEEP_ARCHIVE"}
 _RESTORE_OPERATIONS = BtrfsRestoreOperations()
 
 
@@ -76,8 +76,19 @@ def fetch_current_manifest_key(
     client,
     bucket: str,
     current_key: str,
+    *,
+    wait_for_restore: bool = False,
+    restore_tier: str = "Standard",
+    timeout_seconds: int = 0,
 ) -> str:
-    payload = _fetch_json(client, bucket, current_key)
+    payload = _fetch_json(
+        client,
+        bucket,
+        current_key,
+        wait_for_restore=wait_for_restore,
+        restore_tier=restore_tier,
+        timeout_seconds=timeout_seconds,
+    )
     manifest_key = payload.get("manifest_key")
     if not isinstance(manifest_key, str) or not manifest_key:
         raise RestoreError(f"{current_key} missing manifest_key")
@@ -88,6 +99,10 @@ def resolve_manifest_chain(
     client,
     bucket: str,
     start_key: str,
+    *,
+    wait_for_restore: bool = False,
+    restore_tier: str = "Standard",
+    timeout_seconds: int = 0,
 ) -> list[ManifestInfo]:
     manifests: list[ManifestInfo] = []
     seen: set[str] = set()
@@ -96,7 +111,14 @@ def resolve_manifest_chain(
         if current_key in seen:
             raise RestoreError(f"manifest chain loop detected at {current_key}")
         seen.add(current_key)
-        manifest = fetch_manifest(client, bucket, current_key)
+        manifest = fetch_manifest(
+            client,
+            bucket,
+            current_key,
+            wait_for_restore=wait_for_restore,
+            restore_tier=restore_tier,
+            timeout_seconds=timeout_seconds,
+        )
         manifests.append(manifest)
         parent = manifest.parent_manifest
         if parent:
@@ -109,8 +131,23 @@ def resolve_manifest_chain(
     return manifests
 
 
-def fetch_manifest(client, bucket: str, key: str) -> ManifestInfo:
-    payload = _fetch_json(client, bucket, key)
+def fetch_manifest(
+    client,
+    bucket: str,
+    key: str,
+    *,
+    wait_for_restore: bool = False,
+    restore_tier: str = "Standard",
+    timeout_seconds: int = 0,
+) -> ManifestInfo:
+    payload = _fetch_json(
+        client,
+        bucket,
+        key,
+        wait_for_restore=wait_for_restore,
+        restore_tier=restore_tier,
+        timeout_seconds=timeout_seconds,
+    )
     return parse_manifest(payload, key)
 
 
@@ -438,9 +475,36 @@ def _apply_manifest_stream(
     return bytes_written
 
 
-def _fetch_json(client, bucket: str, key: str) -> dict[str, Any]:
+def _fetch_json(
+    client,
+    bucket: str,
+    key: str,
+    *,
+    wait_for_restore: bool = False,
+    restore_tier: str = "Standard",
+    timeout_seconds: int = 0,
+) -> dict[str, Any]:
+    if wait_for_restore:
+        try:
+            _ensure_metadata_object_restored(
+                client,
+                bucket,
+                key,
+                restore_tier=restore_tier,
+                timeout_seconds=timeout_seconds,
+            )
+        except RestoreError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - normalize restore failures
+            raise RestoreError(f"failed to restore {key}") from exc
     try:
         response = client.get_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        if _is_invalid_object_state(exc):
+            raise RestoreError(
+                f"{key} is stored in archival S3 storage and is not restored"
+            ) from exc
+        raise RestoreError(f"missing object {key}") from exc
     except Exception as exc:  # noqa: BLE001 - surface key errors
         raise RestoreError(f"missing object {key}") from exc
     body = response["Body"].read()
@@ -451,6 +515,63 @@ def _fetch_json(client, bucket: str, key: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RestoreError(f"{key} must be a JSON object")
     return payload
+
+
+def _ensure_metadata_object_restored(
+    client,
+    bucket: str,
+    key: str,
+    *,
+    restore_tier: str,
+    timeout_seconds: int,
+    sleep: callable = time.sleep,
+    time_fn: callable = time.monotonic,
+) -> None:
+    response = _head_object(client, bucket, key)
+    storage_class = response.get("StorageClass")
+    if not needs_restore(storage_class):
+        return
+    restore_header = response.get("Restore")
+    if is_restore_ready(restore_header):
+        return
+    if not is_restore_in_progress(restore_header):
+        try:
+            client.restore_object(
+                Bucket=bucket,
+                Key=key,
+                RestoreRequest={
+                    "Days": 1,
+                    "GlacierJobParameters": {"Tier": restore_tier},
+                },
+            )
+        except ClientError as exc:
+            if not _is_restore_already_in_progress(exc):
+                raise
+    deadline = time_fn() + timeout_seconds
+    delay = 1.0
+    while True:
+        response = _head_object(client, bucket, key)
+        if is_restore_ready(response.get("Restore")):
+            return
+        now = time_fn()
+        if now >= deadline:
+            raise RestoreError(f"restore timeout waiting for {key}")
+        jitter = random.random() * 0.1 * delay
+        sleep(delay + jitter)
+        delay = min(delay * 2.0, 30.0)
+
+
+def _head_object(client, bucket: str, key: str) -> dict[str, Any]:
+    try:
+        return client.head_object(Bucket=bucket, Key=key)
+    except Exception as exc:  # noqa: BLE001 - surface key errors
+        raise RestoreError(f"missing object {key}") from exc
+
+
+def _is_invalid_object_state(exc: ClientError) -> bool:
+    response = getattr(exc, "response", {})
+    error = response.get("Error", {})
+    return error.get("Code") == "InvalidObjectState"
 
 
 def _parse_filesystem(payload: dict[str, Any], key: str) -> str:
