@@ -534,6 +534,19 @@ class RestoreOrchestrator:
         self._backend_factory = backend_factory
 
     def run(self, request: RestoreRequest) -> int:
+        lock = LockFile(self.config.global_cfg.lock_path)
+        try:
+            lock.acquire()
+        except LockError as exc:
+            self.logger.error("event=restore_lock_failed error=%s", exc)
+            return 1
+
+        try:
+            return self._run_locked(request)
+        finally:
+            lock.release()
+
+    def _run_locked(self, request: RestoreRequest) -> int:
         backend = self._get_backend()
         if backend is None:
             return 1

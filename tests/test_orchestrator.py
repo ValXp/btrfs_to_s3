@@ -26,6 +26,7 @@ from btrfs_to_s3.filesystems import (
     FilesystemBackend,
 )
 from btrfs_to_s3.filesystems.base import RestoreBackendError
+from btrfs_to_s3.lock import LockError
 from btrfs_to_s3.orchestrator import (
     BackupOrchestrator,
     BackupRequest,
@@ -765,6 +766,78 @@ class OrchestratorBackupTests(unittest.TestCase):
 
 
 class OrchestratorRestoreTests(unittest.TestCase):
+    def test_restore_lock_contention_returns_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir)
+            request = RestoreRequest(
+                source_name="data",
+                target=Path(temp_dir) / "restore",
+                manifest_key="manifest.json",
+                restore_timeout=None,
+                wait_restore=None,
+                verify="none",
+            )
+
+            class FakeLock:
+                def __init__(self, path: Path) -> None:
+                    self.path = path
+
+                def acquire(self):
+                    raise LockError("locked")
+
+            orchestrator = RestoreOrchestrator(
+                config, logger=logging.getLogger("btrfs_to_s3.orchestrator_test")
+            )
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.LockFile", FakeLock
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_run_locked",
+                side_effect=AssertionError("_run_locked should not be called"),
+            ):
+                self.assertEqual(orchestrator.run(request), 1)
+
+    def test_restore_uses_configured_lock_and_releases_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir)
+            request = RestoreRequest(
+                source_name="data",
+                target=Path(temp_dir) / "restore",
+                manifest_key="manifest.json",
+                restore_timeout=None,
+                wait_restore=None,
+                verify="none",
+            )
+            lock_state: dict[str, object] = {
+                "path": None,
+                "acquired": False,
+                "released": False,
+            }
+
+            class FakeLock:
+                def __init__(self, path: Path) -> None:
+                    lock_state["path"] = path
+
+                def acquire(self):
+                    lock_state["acquired"] = True
+                    return self
+
+                def release(self) -> None:
+                    lock_state["released"] = True
+
+            orchestrator = RestoreOrchestrator(config)
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.LockFile", FakeLock
+            ), mock.patch.object(
+                RestoreOrchestrator, "_run_locked", return_value=0
+            ) as run_locked:
+                self.assertEqual(orchestrator.run(request), 0)
+
+            self.assertEqual(lock_state["path"], config.global_cfg.lock_path)
+            self.assertTrue(lock_state["acquired"])
+            self.assertTrue(lock_state["released"])
+            run_locked.assert_called_once_with(request)
+
     def test_restore_passes_backend_restore_operations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)
