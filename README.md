@@ -223,7 +223,7 @@ You can copy `config.example.toml` as a starting point.
 - `s3.bucket`: required; S3 bucket name for manifests and chunks.
 - `s3.region`: required; AWS region for the S3 client.
 - `s3.prefix`: required; prefix inside the bucket used as the root for backup objects.
-- `s3.chunk_size_bytes`: default `214748364800` (200 GiB); must be > 0; logical chunk size for send streams (multipart part sizes are capped at 5 GiB).
+- `s3.chunk_size_bytes`: default `214748364800` (200 GiB); must be > 0; logical chunk size for send streams. Multipart uploads use 128 MiB parts by default, independent of chunk size.
 - `s3.storage_class_chunks`: default `DEEP_ARCHIVE`; storage class for chunk objects (archive classes may require restores).
 - `s3.storage_class_manifest`: default `STANDARD`; storage class for manifest/current objects.
 - `s3.concurrency`: default `4`; must be >= 1; number of multipart part uploads in flight (further capped by spooling limits).

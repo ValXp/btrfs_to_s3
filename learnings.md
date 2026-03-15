@@ -63,3 +63,4 @@ Learnings
 - FYI: application restore verification now asks the filesystem backend for a local content source; ZFS resolves `dataset@snapshot` to `<mount_root>/<dataset>/.zfs/snapshot/<snapshot>` when available and otherwise logs `event=restore_verify_metadata_only` before falling back to metadata-only verification.
 - FYI: planner/orchestrator internals now use backend-neutral `source`/`sources` naming, but serialized state, manifest JSON, and S3 keys intentionally keep `subvolumes`, `subvolume`, and `subvol/` as compatibility boundaries for existing backups.
 - FYI: `.gitignore` ignores `stop.md`, so the loop-ending marker must be staged with `git add -f stop.md` if it needs to be committed.
+- FYI: `BackupOrchestrator._make_uploader()` must not derive multipart `part_size` from `s3.chunk_size_bytes`; otherwise the default 200 GiB chunk size collapses to 5 GiB S3 parts and the non-spooled upload path can retain `concurrency * 5 GiB` in RAM.

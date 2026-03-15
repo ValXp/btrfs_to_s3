@@ -82,3 +82,4 @@
 - 2026-03-14 09:00 MDT: Completed Task 39 route `run_all.py` through the ZFS application flow; commit "Route ZFS harness through application flow".
 - 2026-03-14 09:07 MDT: Completed Task 40 ZFS restore content verification source resolution; commit "Resolve ZFS restore verification sources".
 - 2026-03-14 09:19 MDT: Completed Task 41 fence or eliminate remaining `subvolume`-only internals; commit "Fence legacy subvolume compatibility boundaries".
+- 2026-03-14 20:33 MDT: Completed Finding 2 multipart default part-size validation/fix; commit "Restore 128 MiB multipart default".

@@ -353,6 +353,36 @@ class OrchestratorHelperTests(unittest.TestCase):
         _, kwargs = run.call_args
         self.assertEqual(kwargs["env"]["PATH"], "/usr/sbin:/usr/bin")
 
+    def test_make_uploader_keeps_default_multipart_part_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir)
+            config = Config(
+                global_cfg=config.global_cfg,
+                schedule=config.schedule,
+                snapshots=config.snapshots,
+                subvolumes=config.subvolumes,
+                s3=S3Config(
+                    bucket=config.s3.bucket,
+                    region=config.s3.region,
+                    prefix=config.s3.prefix,
+                    chunk_size_bytes=200 * 1024 * 1024 * 1024,
+                    storage_class_chunks=config.s3.storage_class_chunks,
+                    storage_class_manifest=config.s3.storage_class_manifest,
+                    concurrency=4,
+                    spool_enabled=False,
+                    sse=config.s3.sse,
+                ),
+                restore=config.restore,
+                filesystem=config.filesystem,
+                zfs=config.zfs,
+            )
+            orchestrator = BackupOrchestrator(config)
+
+            uploader = orchestrator._make_uploader(mock.sentinel.client)
+
+            self.assertEqual(uploader.part_size, 128 * 1024 * 1024)
+            self.assertEqual(uploader.concurrency, 4)
+
 
 class OrchestratorBackupTests(unittest.TestCase):
     def test_backup_dry_run_plans_before_exit(self) -> None:

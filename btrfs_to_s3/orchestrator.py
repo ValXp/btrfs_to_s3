@@ -42,7 +42,7 @@ from btrfs_to_s3.restore import (
     verify_restore,
 )
 from btrfs_to_s3.state import SourceState, State, load_state, save_state
-from btrfs_to_s3.uploader import MAX_PART_SIZE, S3Uploader
+from btrfs_to_s3.uploader import S3Uploader
 
 
 @dataclass(frozen=True)
@@ -227,7 +227,6 @@ class BackupOrchestrator:
             bucket=self.config.s3.bucket,
             storage_class=self.config.s3.storage_class_chunks,
             sse=self.config.s3.sse,
-            part_size=min(self.config.s3.chunk_size_bytes, MAX_PART_SIZE),
             concurrency=self.config.s3.concurrency,
             spool_dir=self.config.global_cfg.spool_dir
             if self.config.s3.spool_enabled
