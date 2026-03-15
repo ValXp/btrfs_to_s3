@@ -32,6 +32,7 @@ from btrfs_to_s3.orchestrator import (
     BackupRequest,
     RestoreOrchestrator,
     RestoreRequest,
+    SourceSelectionError,
     _ShellRunner,
     _build_plan,
     _build_prefix,
@@ -276,6 +277,25 @@ class OrchestratorHelperTests(unittest.TestCase):
             )
             self.assertEqual(selected, [backend.sources[1]])
 
+    def test_select_sources_rejects_unknown_names(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = (
+                Path(temp_dir) / "data",
+                Path(temp_dir) / "root",
+            )
+            config = _make_config(temp_dir, subvolumes=paths)
+            orchestrator = BackupOrchestrator(config)
+            backend = orchestrator._get_backend()
+            assert backend is not None
+
+            with self.assertRaisesRegex(
+                SourceSelectionError,
+                r"unknown source name\(s\): typo",
+            ):
+                orchestrator._select_sources(
+                    backend, False, ("data", "typo")
+                )
+
     def test_build_plan_limits_sources_for_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = (
@@ -516,6 +536,45 @@ class OrchestratorBackupTests(unittest.TestCase):
             self.assertTrue(
                 any(
                     "event=backup_no_sources" in entry
+                    for entry in logs.output
+                )
+            )
+
+    def test_backup_fails_when_any_requested_source_is_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = (
+                Path(temp_dir) / "data",
+                Path(temp_dir) / "root",
+            )
+            config = _make_config(temp_dir, subvolumes=paths)
+            orchestrator = BackupOrchestrator(
+                config, logger=logging.getLogger("btrfs_to_s3.orchestrator_test")
+            )
+            request = BackupRequest(
+                dry_run=False,
+                source_names=("data", "typo"),
+                once=False,
+                no_s3=True,
+            )
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.plan_backups",
+                side_effect=AssertionError("planning should not run"),
+            ), self.assertLogs(
+                "btrfs_to_s3.orchestrator_test", level="ERROR"
+            ) as logs:
+                result = orchestrator._run_locked(request)
+
+            self.assertEqual(result, 2)
+            self.assertTrue(
+                any(
+                    "event=backup_invalid_source_filter" in entry
+                    for entry in logs.output
+                )
+            )
+            self.assertTrue(
+                any(
+                    "unknown source name(s): typo" in entry
                     for entry in logs.output
                 )
             )

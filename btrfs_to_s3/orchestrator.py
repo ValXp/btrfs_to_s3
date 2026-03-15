@@ -63,6 +63,10 @@ class RestoreRequest:
     verify: str | None
 
 
+class SourceSelectionError(ValueError):
+    """Raised when requested source filters do not match configured sources."""
+
+
 class BackupOrchestrator:
     def __init__(
         self,
@@ -101,9 +105,16 @@ class BackupOrchestrator:
 
         state = load_state(self.config.global_cfg.state_path)
         state_sources = dict(state.sources)
-        selected = self._select_sources(
-            backend, write_manifest, request.source_names
-        )
+        try:
+            selected = self._select_sources(
+                backend, write_manifest, request.source_names
+            )
+        except SourceSelectionError as exc:
+            self.logger.error(
+                "event=backup_invalid_source_filter status=failed error=%s",
+                exc,
+            )
+            return 2
         if not selected:
             self.logger.error("event=backup_no_sources status=failed")
             return 2
@@ -185,11 +196,18 @@ class BackupOrchestrator:
         sources = list(backend.sources)
         if names:
             name_set = set(names)
-            return [
+            selected = [
                 source
                 for source in sources
                 if source.identifier in name_set
             ]
+            selected_names = {source.identifier for source in selected}
+            unknown_names = sorted(name_set - selected_names)
+            if unknown_names:
+                raise SourceSelectionError(
+                    "unknown source name(s): " + ", ".join(unknown_names)
+                )
+            return selected
         if write_manifest:
             return sources[:1]
         return sources
