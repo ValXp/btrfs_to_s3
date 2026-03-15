@@ -75,10 +75,6 @@ class BackupOrchestrator:
         self._backend_factory = backend_factory
 
     def run(self, request: BackupRequest) -> int:
-        if request.dry_run:
-            self.logger.info("event=backup_dry_run status=skipped")
-            return 0
-
         lock = LockFile(self.config.global_cfg.lock_path)
         try:
             lock.acquire()
@@ -119,8 +115,26 @@ class BackupOrchestrator:
             self.logger.info("event=backup_not_due status=skipped")
             return 0
 
+        if request.dry_run:
+            self.logger.info(
+                "event=backup_dry_run status=skipped planned_items=%d",
+                len(work_items),
+            )
+            return 0
+
         if request.no_s3:
-            self.logger.info("event=backup_no_s3 status=skipped")
+            for source, _plan_item, action in work_items:
+                snapshot_kind = "full" if action == "full" else "inc"
+                self._create_snapshot(
+                    backend,
+                    source.path,
+                    source.identifier,
+                    snapshot_kind,
+                )
+            self.logger.info(
+                "event=backup_no_s3 status=skipped snapshot_count=%d",
+                len(work_items),
+            )
             return 0
 
         if not _has_aws_credentials():

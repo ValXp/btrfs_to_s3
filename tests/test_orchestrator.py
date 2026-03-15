@@ -355,7 +355,7 @@ class OrchestratorHelperTests(unittest.TestCase):
 
 
 class OrchestratorBackupTests(unittest.TestCase):
-    def test_backup_dry_run_skips_lock(self) -> None:
+    def test_backup_dry_run_plans_before_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)
             request = BackupRequest(
@@ -364,15 +364,59 @@ class OrchestratorBackupTests(unittest.TestCase):
                 once=False,
                 no_s3=False,
             )
+            backend = _make_backend(temp_dir)
+            plan_item = PlanItem(
+                source_name="data",
+                action="full",
+                parent_snapshot=None,
+                reason="full_due",
+            )
+            lock_state = {"acquired": False, "released": False}
 
             class FakeLock:
                 def __init__(self, path: Path) -> None:
-                    raise AssertionError("lock should not be used")
+                    self.path = path
 
-            with mock.patch("btrfs_to_s3.orchestrator.LockFile", FakeLock):
+                def acquire(self):
+                    lock_state["acquired"] = True
+                    return self
+
+                def release(self) -> None:
+                    lock_state["released"] = True
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.LockFile", FakeLock
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_get_backend",
+                return_value=backend,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_select_sources",
+                return_value=[backend.sources[0]],
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_plan_work",
+                return_value=[(backend.sources[0], plan_item, "full")],
+            ) as plan_work, mock.patch.object(
+                BackupOrchestrator,
+                "_create_snapshot",
+                side_effect=AssertionError("snapshots should not be created"),
+            ), mock.patch(
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                side_effect=AssertionError("credentials should not be checked"),
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_init_s3_client",
+                side_effect=AssertionError("s3 client should not be initialized"),
+            ), mock.patch("btrfs_to_s3.orchestrator.save_state") as save_state:
                 orchestrator = BackupOrchestrator(config)
                 result = orchestrator.run(request)
             self.assertEqual(result, 0)
+            self.assertTrue(lock_state["acquired"])
+            self.assertTrue(lock_state["released"])
+            plan_work.assert_called_once()
+            save_state.assert_not_called()
 
     def test_backup_no_subvolumes_returns_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -398,7 +442,7 @@ class OrchestratorBackupTests(unittest.TestCase):
                 )
             )
 
-    def test_backup_no_s3_skips_credentials_and_s3_client(self) -> None:
+    def test_backup_no_s3_creates_local_snapshot_and_skips_s3(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)
             request = BackupRequest(
@@ -408,10 +452,23 @@ class OrchestratorBackupTests(unittest.TestCase):
                 no_s3=True,
             )
             backend = _make_backend(temp_dir)
+            plan_item = PlanItem(
+                source_name="data",
+                action="full",
+                parent_snapshot=None,
+                reason="full_due",
+            )
+            snapshot = Snapshot(
+                name="data__20260101T000000Z__full",
+                path=Path(temp_dir) / "snapshots" / "data__20260101T000000Z__full",
+                kind="full",
+                created_at=datetime.now(timezone.utc),
+            )
+            backend.snapshot_operations.create_snapshot.return_value = snapshot
             with mock.patch.object(
                 BackupOrchestrator,
                 "_plan_work",
-                return_value=[(backend.sources[0], mock.Mock(), "full")],
+                return_value=[(backend.sources[0], plan_item, "full")],
             ), mock.patch.object(
                 BackupOrchestrator,
                 "_get_backend",
@@ -427,9 +484,27 @@ class OrchestratorBackupTests(unittest.TestCase):
                 BackupOrchestrator,
                 "_init_s3_client",
                 side_effect=AssertionError("s3 client should not be initialized"),
-            ):
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_upload_stream",
+                side_effect=AssertionError("upload should not be started"),
+            ) as upload_stream, mock.patch.object(
+                BackupOrchestrator,
+                "_publish_manifest",
+                side_effect=AssertionError("manifest should not be published"),
+            ) as publish_manifest, mock.patch(
+                "btrfs_to_s3.orchestrator.save_state"
+            ) as save_state:
                 orchestrator = BackupOrchestrator(config)
                 self.assertEqual(orchestrator._run_locked(request), 0)
+            backend.snapshot_operations.create_snapshot.assert_called_once_with(
+                backend.sources[0].path,
+                "data",
+                "full",
+            )
+            upload_stream.assert_not_called()
+            publish_manifest.assert_not_called()
+            save_state.assert_not_called()
 
     def test_backup_requires_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
