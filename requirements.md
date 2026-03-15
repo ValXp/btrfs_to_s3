@@ -19,6 +19,9 @@ The system must back up three Btrfs subvolumes on the same filesystem:
 - Run automatically on an always-on host and be schedulable for **2am local time**.
 - Be resilient to interruption (host crash, network drop): reruns should succeed without manual cleanup.
 - Enable restoring the data from S3 (restore implementation is explicitly deferred until after backup/upload is working and validated).
+- Make disaster recovery on a replacement machine a first-class restore goal:
+  a reconstructed config containing easy-to-find information must be sufficient
+  to restore from S3 even if the original host and its config are gone.
 
 ## Non-goals (initially)
 
@@ -114,6 +117,13 @@ The scan helper lives at `scripts/fs_growth_analysis.sh`.
   - upload concurrency tuning
   - retention policy (at least: keep latest generation; prune local snapshots)
 - Provide clear logs and exit codes suitable for systemd/cron.
+- Restore configuration must be reconstructible from obvious facts such as S3
+  bucket/region/prefix, backend choice, and local restore target settings; it
+  must not require recovering the exact original source inventory solely to
+  accept a restore source name.
+- Provide a discovery/list feature that can inspect S3 directly and report the
+  restorable sources available under a configured bucket/prefix, so recovery
+  does not depend on remembering source names from the lost machine.
 
 ## Automation
 
@@ -139,6 +149,13 @@ The scan helper lives at `scripts/fs_growth_analysis.sh`.
   - verify restored data (metadata + file content checks)
 - The tool must transparently handle all S3 storage classes, including
   archival restore delays.
+- A restore on a new machine must remain possible with a reconstructed config.
+- Restoring from `current.json` or an explicit manifest key must not depend on
+  reproducing the original `subvolumes.paths` or `zfs.source_datasets` values
+  from the source host.
+- The tool must provide an S3-backed way to list restorable sources for a
+  bucket/prefix, and a way to enumerate available manifests for a source when
+  manual recovery requires choosing a specific restore point.
 
 ## Test Harness Notes
 
