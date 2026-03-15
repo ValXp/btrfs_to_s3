@@ -221,8 +221,8 @@ planner compatibility and legacy state upgrades.
   `--once` (ignore schedule), `--no-s3` (local only for diagnostics).
 - Restore flags:
   - `--target` (required): restore target path.
-  - `--manifest-key` (optional): explicit manifest to restore.
-  - `--current` (default): restore from `current.json`.
+  - `--manifest-key` (optional): explicit manifest to restore; when omitted,
+    restore resolves `current.json` for the selected source.
   - `--wait-restore` (default on): request/await S3 restore for archival storage.
   - `--restore-timeout` (e.g., `6h`): max time to wait for S3 restore readiness.
   - `--verify` (default on): run metadata + content verification.
