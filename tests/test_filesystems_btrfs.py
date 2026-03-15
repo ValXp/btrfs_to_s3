@@ -159,15 +159,22 @@ class BtrfsSendOperationsTests(unittest.TestCase):
         stdout = io.BytesIO(b"stream")
         process = mock.Mock()
         process.stdout = stdout
-        with mock.patch("btrfs_to_s3.filesystems.btrfs.subprocess.Popen") as popen:
-            popen.return_value = process
-            result = self.operations.open_send(Path("/snapshots/child"))
+        with mock.patch.dict("os.environ", {"PATH": "/bin"}):
+            with mock.patch(
+                "btrfs_to_s3.filesystems.btrfs.subprocess.Popen"
+            ) as popen:
+                popen.return_value = process
+                result = self.operations.open_send(Path("/snapshots/child"))
 
         popen.assert_called_once_with(
             ["btrfs", "send", "/snapshots/child"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=mock.ANY,
         )
+        path = popen.call_args.kwargs["env"]["PATH"]
+        self.assertIn("/usr/sbin", path)
+        self.assertIn("/sbin", path)
         self.assertEqual(result, SendStream(process=process, stdout=stdout))
 
     def test_open_send_builds_incremental_args(self) -> None:
@@ -185,6 +192,7 @@ class BtrfsSendOperationsTests(unittest.TestCase):
             ["btrfs", "send", "-p", "/snapshots/parent", "/snapshots/child"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=mock.ANY,
         )
         self.assertEqual(result, SendStream(process=process, stdout=stdout))
 
@@ -206,18 +214,23 @@ class BtrfsRestoreOperationsTests(unittest.TestCase):
         popen = mock.Mock(return_value=process)
         operations = BtrfsRestoreOperations(popen=popen)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            target = Path(temp_dir) / "restore" / "data"
-            result = operations.open_receive(
-                target,
-                "/snapshots/data__20260101T000000Z__full",
-            )
+        with mock.patch.dict("os.environ", {"PATH": "/bin"}):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                target = Path(temp_dir) / "restore" / "data"
+                result = operations.open_receive(
+                    target,
+                    "/snapshots/data__20260101T000000Z__full",
+                )
 
         popen.assert_called_once_with(
             ["btrfs", "receive", str(target.parent)],
             stdin=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=mock.ANY,
         )
+        path = popen.call_args.kwargs["env"]["PATH"]
+        self.assertIn("/usr/sbin", path)
+        self.assertIn("/sbin", path)
         self.assertEqual(
             result,
             ReceiveStream(

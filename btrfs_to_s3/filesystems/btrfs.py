@@ -128,6 +128,7 @@ class BtrfsSendOperations(SendOperations):
             args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=_command_env(),
         )
         if process.stdout is None:
             process.kill()
@@ -157,6 +158,7 @@ class BtrfsRestoreOperations(RestoreOperations):
             ["btrfs", "receive", str(target.parent)],
             stdin=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=_command_env(),
         )
         if process.stdin is None:
             process.kill()
@@ -248,15 +250,13 @@ class BtrfsRestoreOperations(RestoreOperations):
         self._run(["btrfs", "subvolume", "delete", str(path)])
 
     def _run(self, args: list[str]) -> subprocess.CompletedProcess[str]:
-        env = os.environ.copy()
-        env["PATH"] = ensure_sbin_on_path(env.get("PATH", ""))
         try:
             return self._runner(
                 args,
                 check=True,
                 text=True,
                 capture_output=True,
-                env=env,
+                env=_command_env(),
             )
         except subprocess.CalledProcessError as exc:
             stderr = (exc.stderr or "").strip()
@@ -270,6 +270,12 @@ class BtrfsRestoreOperations(RestoreOperations):
 
 def _decode_stderr(stderr: bytes) -> str:
     return stderr.decode("utf-8", errors="replace").strip()
+
+
+def _command_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["PATH"] = ensure_sbin_on_path(env.get("PATH", ""))
+    return env
 
 
 def _parse_uuid(output: str) -> str | None:
