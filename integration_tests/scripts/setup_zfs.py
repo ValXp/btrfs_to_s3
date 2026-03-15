@@ -22,6 +22,12 @@ DEFAULT_CONFIG = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, "config", "test_zfs.toml")
 )
 POOL_STATE_FILE = "zfs_pool_state.json"
+GENERATED_RUN_STATE_FILES = (
+    "state.json",
+    "manifest.json",
+    "restore_target.json",
+    "restore_targets.json",
+)
 
 
 def main() -> int:
@@ -82,6 +88,8 @@ def main() -> int:
                 create_args=zfs_cfg.get("zpool_create_args", ()),
                 log=log,
             )
+            if state["pool_status"] == "created":
+                _clear_generated_run_state(run_dir, log)
             _write_pool_state(state_path, state)
             log.write(f"stored pool state in {state_path}")
 
@@ -179,6 +187,22 @@ def _dataset_create_args(
     if any("snapdir=" in arg for arg in create_args):
         return create_args
     return create_args + ("-o", "snapdir=visible")
+
+
+def _clear_generated_run_state(run_dir: str, log) -> None:
+    removed: list[str] = []
+    for name in GENERATED_RUN_STATE_FILES:
+        path = os.path.join(run_dir, name)
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            continue
+        removed.append(name)
+    if removed:
+        log.write(
+            "removed stale run state: " + ", ".join(removed),
+            level="WARN",
+        )
 
 
 def _write_pool_state(path: str, state: dict[str, object]) -> None:

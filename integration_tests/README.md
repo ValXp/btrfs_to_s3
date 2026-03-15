@@ -63,6 +63,10 @@ How the ZFS harness differs
   `run_incremental.py --skip-mutate`, `run_interrupt.py`,
   `verify_manifest.py`, `verify_s3.py`, `verify_retention.py`,
   `run_restore.py --source all`, and `verify_restore.py --source all`.
+- When `setup_zfs.py` creates a fresh disposable pool, it clears stale local
+  harness metadata in `paths.run_dir` such as `state.json`, `manifest.json`,
+  and restore target metadata so reruns do not inherit application state from a
+  previous pool.
 - The standalone ZFS probe scripts (`run_zfs_snapshot_send_receive.py`,
   `run_zfs_incremental.py`, `run_zfs_retention.py`) are still available, but
   they are now manual diagnostics instead of the only ZFS path in `run_all.py`.

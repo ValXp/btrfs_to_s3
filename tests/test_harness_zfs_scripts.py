@@ -31,6 +31,49 @@ class RecordingLog:
 
 
 class SetupZFSScriptTests(unittest.TestCase):
+    def test_setup_clears_stale_generated_run_state_for_fresh_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            run_dir = Path(config["paths"]["run_dir"])
+            run_dir.mkdir(parents=True, exist_ok=True)
+            stale_paths = [
+                run_dir / "state.json",
+                run_dir / "manifest.json",
+                run_dir / "restore_target.json",
+                run_dir / "restore_targets.json",
+            ]
+            for path in stale_paths:
+                path.write_text("stale\n", encoding="utf-8")
+            keep_path = run_dir / "keep.txt"
+            keep_path.write_text("keep\n", encoding="utf-8")
+
+            log = RecordingLog()
+            zfs_mock = mock.Mock()
+            zfs_mock.create_backing_file.return_value = config["zfs"]["pool_file"]
+            zfs_mock.create_pool.return_value = config["zfs"]["pool_name"]
+
+            with mock.patch.object(setup_zfs, "load_config", return_value=config), mock.patch.object(
+                setup_zfs, "open_log", return_value=log
+            ), mock.patch.object(setup_zfs, "zfs", zfs_mock), mock.patch.object(
+                setup_zfs, "_chown_for_user"
+            ), mock.patch.object(
+                setup_zfs.sys,
+                "argv",
+                ["setup_zfs.py", "--config", str(Path(tmpdir) / "test_zfs.toml")],
+            ):
+                result = setup_zfs.main()
+                self.assertEqual(result, 0)
+                for path in stale_paths:
+                    self.assertFalse(path.exists(), path.name)
+                self.assertTrue(keep_path.exists())
+                self.assertIn(
+                    (
+                        "WARN",
+                        "removed stale run state: state.json, manifest.json, restore_target.json, restore_targets.json",
+                    ),
+                    log.entries,
+                )
+
     def test_setup_creates_pool_datasets_and_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _zfs_config(tmpdir)
