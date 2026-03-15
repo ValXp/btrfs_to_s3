@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -168,6 +168,26 @@ class CliTests(unittest.TestCase):
         ), redirect_stdout(buffer):
             exit_code = cli.main(["backup", "--config", str(path)])
         self.assertEqual(exit_code, 0)
+
+    def test_main_reports_malformed_toml_as_config_error(self) -> None:
+        malformed_toml = (
+            "[global]\n"
+            'log_level = "bad\\q"\n'
+            "[subvolumes]\n"
+            'paths = ["/srv/data/data"]\n'
+            "[s3]\n"
+            'bucket = "bucket-name"\n'
+            'region = "us-east-1"\n'
+            'prefix = "backup/data"\n'
+        )
+        with tempfile.NamedTemporaryFile("w", delete=False) as handle:
+            handle.write(malformed_toml)
+            path = Path(handle.name)
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            exit_code = cli.main(["backup", "--config", str(path)])
+        self.assertEqual(exit_code, 2)
+        self.assertIn("config error: failed to parse config:", stderr.getvalue())
 
     def test_parse_restore_args(self) -> None:
         args = cli.parse_args(

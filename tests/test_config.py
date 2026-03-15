@@ -273,6 +273,24 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(config_module.ConfigError):
                 config_module.load_config(missing)
 
+    def test_rejects_malformed_toml(self) -> None:
+        toml = (
+            "[global]\n"
+            'log_level = "bad\\q"\n'
+            "[subvolumes]\n"
+            'paths = ["/srv/data/data"]\n'
+            "[s3]\n"
+            'bucket = "bucket-name"\n'
+            'region = "us-east-1"\n'
+            'prefix = "backup/data"\n'
+        )
+        with tempfile.NamedTemporaryFile("w", delete=False) as handle:
+            handle.write(toml)
+            path = Path(handle.name)
+        with self.assertRaises(config_module.ConfigError) as context:
+            config_module.load_config(path)
+        self.assertIn("failed to parse config", str(context.exception))
+
     def test_rejects_unreadable_config_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir)

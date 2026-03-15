@@ -11,6 +11,8 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - fallback for 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 
+TOMLDecodeError = tomllib.TOMLDecodeError
+
 GiB = 1024**3
 
 DEFAULT_LOG_LEVEL = "info"
@@ -246,6 +248,8 @@ def load_config(path: Path) -> Config:
     try:
         with path.open("rb") as handle:
             data = tomllib.load(handle)
+    except TOMLDecodeError as exc:
+        raise ConfigError(f"failed to parse config: {exc}") from exc
     except OSError as exc:
         raise ConfigError(f"failed to read config: {exc}") from exc
     return Config.from_dict(data)
