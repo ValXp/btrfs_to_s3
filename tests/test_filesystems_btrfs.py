@@ -367,6 +367,37 @@ class BtrfsRestoreOperationsTests(unittest.TestCase):
         self.assertIn("exit code 2", str(context.exception))
         self.assertIn("receive stderr", str(context.exception))
 
+    def test_complete_receive_clears_closed_stdin_before_communicate(self) -> None:
+        operations = BtrfsRestoreOperations(runner=mock.Mock())
+        process = mock.Mock()
+        process.stdin = io.BytesIO()
+        process.stdin.close()
+        process.returncode = 0
+
+        def communicate():
+            if process.stdin is not None:
+                raise ValueError("flush of closed file")
+            return b"", b""
+
+        process.communicate.side_effect = communicate
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "target"
+            created = Path(temp_dir) / "data__20260101T000000Z__full"
+            created.mkdir()
+
+            operations.complete_receive(
+                ReceiveStream(
+                    process=process,
+                    stdin=io.BytesIO(),
+                    created_path=created,
+                ),
+                target,
+            )
+
+        process.communicate.assert_called_once_with()
+        self.assertIsNone(process.stdin)
+
     def test_complete_receive_requires_created_path(self) -> None:
         operations = BtrfsRestoreOperations(runner=mock.Mock())
         process = mock.Mock()

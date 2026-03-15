@@ -186,6 +186,9 @@ class BtrfsRestoreOperations(RestoreOperations):
         stream: ReceiveStream,
         target: Path,
     ) -> None:
+        stdin = getattr(stream.process, "stdin", None)
+        if stdin is not None and getattr(stdin, "closed", False) is True:
+            stream.process.stdin = None
         _stdout, stderr = stream.process.communicate()
         code = stream.process.returncode
         if code != 0:
