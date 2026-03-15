@@ -289,13 +289,21 @@ def download_and_verify_chunks(
         response = client.get_object(Bucket=bucket, Key=chunk.key)
         body = response["Body"]
         hasher = hashlib.sha256()
-        while True:
-            data = body.read(read_size)
-            if not data:
-                break
-            hasher.update(data)
-            output.write(data)
-            total_bytes += len(data)
+        try:
+            while True:
+                data = body.read(read_size)
+                if not data:
+                    break
+                hasher.update(data)
+                output.write(data)
+                total_bytes += len(data)
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
         digest = hasher.hexdigest()
         if digest != chunk.sha256:
             raise RestoreError(f"hash mismatch for {chunk.key}")

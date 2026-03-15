@@ -21,6 +21,7 @@ class FakeBody:
     def __init__(self, payload: bytes) -> None:
         self._payload = payload
         self._offset = 0
+        self.closed = False
 
     def read(self, size: int | None = None) -> bytes:
         if size is None:
@@ -31,6 +32,9 @@ class FakeBody:
         end = min(len(self._payload), start + size)
         self._offset = end
         return self._payload[start:end]
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class FakeS3:
@@ -592,7 +596,8 @@ class RestoreTests(unittest.TestCase):
 
     def test_hash_mismatch_raises(self) -> None:
         client = FakeS3()
-        client.objects["chunk.bin"] = b"payload"
+        body = FakeBody(b"payload")
+        client.objects["chunk.bin"] = body
         chunk = restore.ChunkInfo(key="chunk.bin", sha256="bad", size=None)
         output = io.BytesIO()
 
@@ -601,8 +606,9 @@ class RestoreTests(unittest.TestCase):
                 client, "bucket", [chunk], output
             )
         self.assertIn("hash mismatch", str(context.exception))
+        self.assertTrue(body.closed)
 
-    def test_download_streams_and_verifies(self) -> None:
+    def test_download_streams_and_closes_each_chunk_body(self) -> None:
         class RecordingBody(FakeBody):
             def __init__(self, payload: bytes) -> None:
                 super().__init__(payload)
@@ -612,29 +618,43 @@ class RestoreTests(unittest.TestCase):
                 self.read_sizes.append(size)
                 return super().read(size)
 
-        payload = b"streamed-payload"
-        body = RecordingBody(payload)
+        payload_one = b"streamed-payload"
+        payload_two = b"second-chunk"
+        body_one = RecordingBody(payload_one)
+        body_two = RecordingBody(payload_two)
         client = FakeS3()
-        client.objects["chunk.bin"] = body
-        chunk = restore.ChunkInfo(
-            key="chunk.bin",
-            sha256=hashlib.sha256(payload).hexdigest(),
-            size=len(payload),
-        )
+        client.objects["chunk-1.bin"] = body_one
+        client.objects["chunk-2.bin"] = body_two
+        chunks = [
+            restore.ChunkInfo(
+                key="chunk-1.bin",
+                sha256=hashlib.sha256(payload_one).hexdigest(),
+                size=len(payload_one),
+            ),
+            restore.ChunkInfo(
+                key="chunk-2.bin",
+                sha256=hashlib.sha256(payload_two).hexdigest(),
+                size=len(payload_two),
+            ),
+        ]
         output = io.BytesIO()
 
         total_bytes = restore.download_and_verify_chunks(
             client,
             "bucket",
-            [chunk],
+            chunks,
             output,
             read_size=4,
         )
 
-        self.assertEqual(output.getvalue(), payload)
-        self.assertEqual(total_bytes, len(payload))
-        self.assertTrue(all(size == 4 for size in body.read_sizes))
-        self.assertGreater(len(body.read_sizes), 2)
+        self.assertEqual(output.getvalue(), payload_one + payload_two)
+        self.assertEqual(total_bytes, len(payload_one) + len(payload_two))
+        self.assertTrue(all(size == 4 for size in body_one.read_sizes))
+        self.assertTrue(all(size == 4 for size in body_two.read_sizes))
+        self.assertGreater(len(body_one.read_sizes), 2)
+        self.assertGreater(len(body_two.read_sizes), 2)
+        self.assertTrue(body_one.closed)
+        self.assertTrue(body_two.closed)
 
     def test_download_requires_positive_read_size(self) -> None:
         client = FakeS3()
