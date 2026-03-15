@@ -241,7 +241,7 @@ spool_size_bytes = 214748364800
 [schedule]
 full_every_days = 180
 incremental_every_days = 7
-run_at = "02:00"
+run_at = "02:00" # host-local time; the bundled timer also defaults to 02:00
 
 [snapshots]
 base_dir = "/srv/snapshots"
@@ -281,7 +281,7 @@ spool_size_bytes = 214748364800
 [schedule]
 full_every_days = 180
 incremental_every_days = 7
-run_at = "02:00"
+run_at = "02:00" # host-local time; the bundled timer also defaults to 02:00
 
 [filesystem]
 backend = "zfs"
@@ -318,7 +318,7 @@ restore_tier = "Standard"
 Validation rules:
 - Paths must be absolute after `~` expansion.
 - `chunk_size_bytes`, `spool_size_bytes`, and cadence days must be > 0.
-- `run_at` uses 24-hour `HH:MM` format.
+- `run_at` uses 24-hour `HH:MM` host-local time. The bundled timer's `02:00` schedule is the default example; customize the timer to match if you change `schedule.run_at`.
 - `snapshots.base_dir` and `subvolumes.paths` are required for Btrfs.
 - `[zfs]` is required for ZFS and must include `pool_name`, `mount_root`,
   `source_datasets`, `receive_parent_dataset`, and `snapshot_prefix`.

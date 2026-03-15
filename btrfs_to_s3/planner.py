@@ -62,6 +62,11 @@ def plan_backups(
         if source_names is not None
         else _config_source_names(config)
     )
+    if not _scheduled_run_due(now, config.schedule.run_at, state.last_run_at):
+        return [
+            _scheduled_skip_plan(name, state.sources.get(name))
+            for name in names
+        ]
     plans: list[PlanItem] = []
     for name in names:
         source_state = state.sources.get(name)
@@ -82,6 +87,34 @@ def _config_source_names(config: Config) -> tuple[str, ...]:
     if config.filesystem.backend == "zfs" and config.zfs is not None:
         return config.zfs.source_datasets
     return tuple(_btrfs_source_name(path) for path in config.subvolumes.paths)
+
+
+def _scheduled_run_due(
+    now: datetime,
+    run_at: str,
+    last_run_at: str | None,
+) -> bool:
+    today_run_at = _scheduled_run_at(now, run_at)
+    if now < today_run_at:
+        return False
+    last_run = _parse_iso_timestamp(last_run_at)
+    if last_run is None:
+        return True
+    return last_run.astimezone(now.tzinfo) < today_run_at
+
+
+def _scheduled_run_at(now: datetime, run_at: str) -> datetime:
+    hour, minute = (int(part) for part in run_at.split(":", 1))
+    return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def _scheduled_skip_plan(name: str, source_state) -> PlanItem:
+    return PlanItem(
+        source_name=name,
+        action="skip",
+        parent_snapshot=source_state.last_snapshot if source_state else None,
+        reason="scheduled_run_not_due",
+    )
 
 
 def _plan_source(

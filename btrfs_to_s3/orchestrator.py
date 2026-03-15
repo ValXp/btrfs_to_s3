@@ -92,8 +92,9 @@ class BackupOrchestrator:
             lock.release()
 
     def _run_locked(self, request: BackupRequest) -> int:
-        now = datetime.now(timezone.utc)
-        timestamp = now.strftime("%Y%m%dT%H%M%SZ")
+        utc_now = datetime.now(timezone.utc)
+        planning_now = utc_now.astimezone()
+        timestamp = utc_now.strftime("%Y%m%dT%H%M%SZ")
         prefix = _build_prefix(self.config.s3.prefix)
         run_dir = os.environ.get("BTRFS_TO_S3_HARNESS_RUN_DIR")
         write_manifest = run_dir is not None
@@ -112,7 +113,7 @@ class BackupOrchestrator:
             return 2
 
         work_items = self._plan_work(
-            state, now, backend, selected, request.once
+            state, planning_now, backend, selected, request.once
         )
         if not work_items:
             self.logger.info("event=backup_not_due status=skipped")

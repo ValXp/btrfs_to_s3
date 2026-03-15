@@ -108,7 +108,7 @@ spool_size_bytes = 214748364800
 [schedule]
 full_every_days = 180
 incremental_every_days = 7
-run_at = "02:00"
+run_at = "02:00" # host-local time; the bundled timer also defaults to 02:00
 
 [snapshots]
 base_dir = "/srv/snapshots"
@@ -150,7 +150,7 @@ spool_size_bytes = 214748364800
 [schedule]
 full_every_days = 180
 incremental_every_days = 7
-run_at = "02:00"
+run_at = "02:00" # host-local time; the bundled timer also defaults to 02:00
 
 [filesystem]
 backend = "zfs"
@@ -203,7 +203,7 @@ You can copy `config.example.toml` as a starting point.
 `schedule`:
 - `schedule.full_every_days`: default `180`; must be > 0; number of days between full backups.
 - `schedule.incremental_every_days`: default `7`; must be > 0; number of days between incremental backups.
-- `schedule.run_at`: default `02:00`; 24-hour `HH:MM` time used to decide if a run is due.
+- `schedule.run_at`: default `02:00`; 24-hour `HH:MM` host-local time used to decide if a run is due. The bundled systemd timer also defaults to `02:00`; if you customize `run_at`, customize the timer to match.
 
 `snapshots`:
 - `snapshots.base_dir`: default `/srv/snapshots`; required for Btrfs; absolute directory where local readonly snapshots are created.

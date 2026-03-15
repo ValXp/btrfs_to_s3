@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from btrfs_to_s3.config import (
@@ -19,6 +19,8 @@ from btrfs_to_s3.config import (
 )
 from btrfs_to_s3.planner import plan_backups
 from btrfs_to_s3.state import SourceState, State
+
+LOCAL_TZ = timezone(timedelta(hours=-7))
 
 
 def make_config() -> Config:
@@ -106,6 +108,44 @@ def make_zfs_config() -> Config:
 
 
 class PlannerTests(unittest.TestCase):
+    def test_before_run_at_skips_with_scheduled_reason(self) -> None:
+        config = make_config()
+        now = datetime(2026, 1, 10, 1, 30, tzinfo=LOCAL_TZ)
+
+        plan = plan_backups(config, State(), now)
+
+        self.assertEqual(plan[0].action, "skip")
+        self.assertEqual(plan[0].reason, "scheduled_run_not_due")
+
+    def test_after_run_at_without_prior_run_still_plans_backup(self) -> None:
+        config = make_config()
+        now = datetime(2026, 1, 10, 3, 0, tzinfo=LOCAL_TZ)
+
+        plan = plan_backups(config, State(), now)
+
+        self.assertEqual(plan[0].action, "full")
+        self.assertEqual(plan[0].reason, "full_due")
+
+    def test_after_same_day_last_run_skips_with_scheduled_reason(self) -> None:
+        config = make_config()
+        state = State(last_run_at="20260110T090000Z")
+        now = datetime(2026, 1, 10, 3, 0, tzinfo=LOCAL_TZ)
+
+        plan = plan_backups(config, state, now)
+
+        self.assertEqual(plan[0].action, "skip")
+        self.assertEqual(plan[0].reason, "scheduled_run_not_due")
+
+    def test_next_day_after_previous_run_is_due_again(self) -> None:
+        config = make_config()
+        state = State(last_run_at="20260110T090000Z")
+        now = datetime(2026, 1, 11, 3, 0, tzinfo=LOCAL_TZ)
+
+        plan = plan_backups(config, state, now)
+
+        self.assertEqual(plan[0].action, "full")
+        self.assertEqual(plan[0].reason, "full_due")
+
     def test_full_due(self) -> None:
         config = make_config()
         state = State(
@@ -113,7 +153,7 @@ class PlannerTests(unittest.TestCase):
                 "data": SourceState(last_full_at="2024-01-01T00:00:00Z")
             }
         )
-        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        now = datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)
         plan = plan_backups(config, state, now)
         self.assertEqual(plan[0].action, "full")
         self.assertEqual(plan[0].source_name, "data")
@@ -129,7 +169,7 @@ class PlannerTests(unittest.TestCase):
                 )
             }
         )
-        now = datetime(2026, 1, 10, tzinfo=timezone.utc)
+        now = datetime(2026, 1, 10, 3, 0, tzinfo=timezone.utc)
         plan = plan_backups(
             config,
             state,
@@ -149,7 +189,7 @@ class PlannerTests(unittest.TestCase):
                 )
             }
         )
-        now = datetime(2026, 1, 10, tzinfo=timezone.utc)
+        now = datetime(2026, 1, 10, 3, 0, tzinfo=timezone.utc)
         plan = plan_backups(config, state, now, available_snapshots=set())
         self.assertEqual(plan[0].action, "full")
 
@@ -164,7 +204,7 @@ class PlannerTests(unittest.TestCase):
                 )
             }
         )
-        now = datetime(2026, 1, 10, tzinfo=timezone.utc)
+        now = datetime(2026, 1, 10, 3, 0, tzinfo=timezone.utc)
         plan = plan_backups(
             config,
             state,
@@ -184,7 +224,7 @@ class PlannerTests(unittest.TestCase):
                 )
             }
         )
-        now = datetime(2026, 1, 8, tzinfo=timezone.utc)
+        now = datetime(2026, 1, 8, 3, 0, tzinfo=timezone.utc)
         plan = plan_backups(
             config,
             state,
@@ -209,7 +249,7 @@ class PlannerTests(unittest.TestCase):
             }
         )
 
-        now = datetime(2026, 1, 10, tzinfo=timezone.utc)
+        now = datetime(2026, 1, 10, 3, 0, tzinfo=timezone.utc)
         plan = plan_backups(
             config,
             state,

@@ -2,6 +2,7 @@
 Description=Run btrfs_to_s3 filesystem backups at 2am
 
 [Timer]
+# Default 02:00 trigger; keep this aligned with schedule.run_at if you customize it.
 OnCalendar=*-*-* 02:00:00
 Persistent=true
 
