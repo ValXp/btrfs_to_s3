@@ -43,6 +43,7 @@ from btrfs_to_s3.orchestrator import (
 from btrfs_to_s3.planner import PlanItem
 from btrfs_to_s3.restore import ManifestInfo
 from btrfs_to_s3.snapshots import Snapshot
+from btrfs_to_s3.state import SourceState, State
 from btrfs_to_s3.uploader import UploadResult
 
 
@@ -611,6 +612,300 @@ class OrchestratorBackupTests(unittest.TestCase):
                 BackupOrchestrator, "_init_s3_client", return_value=None
             ):
                 self.assertEqual(orchestrator._run_locked(request), 1)
+
+    def test_backup_persists_successful_sources_before_later_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = (
+                Path(temp_dir) / "data",
+                Path(temp_dir) / "root",
+            )
+            config = _make_config(temp_dir, subvolumes=paths)
+            orchestrator = BackupOrchestrator(config)
+            request = BackupRequest(
+                dry_run=False,
+                source_names=None,
+                once=False,
+                no_s3=False,
+            )
+            backend = _make_backend(
+                temp_dir,
+                paths=paths,
+                identifiers=("data", "root"),
+            )
+            prior_state = State(last_run_at="20260313T090000Z")
+            persisted_source = SourceState(
+                last_snapshot=str(
+                    Path(temp_dir)
+                    / "snapshots"
+                    / "data__20260314T150000Z__full"
+                ),
+                last_snapshot_name="data__20260314T150000Z__full",
+                last_snapshot_path=str(
+                    Path(temp_dir)
+                    / "snapshots"
+                    / "data__20260314T150000Z__full"
+                ),
+                last_manifest=(
+                    "backup/subvol/data/full/manifest-20260314T150000Z.json"
+                ),
+                last_full_at="20260314T150000Z",
+            )
+            work_items = [
+                (
+                    backend.sources[0],
+                    PlanItem(
+                        source_name="data",
+                        action="full",
+                        parent_snapshot=None,
+                        reason="full_due",
+                    ),
+                    "full",
+                ),
+                (
+                    backend.sources[1],
+                    PlanItem(
+                        source_name="root",
+                        action="full",
+                        parent_snapshot=None,
+                        reason="full_due",
+                    ),
+                    "full",
+                ),
+            ]
+
+            def fake_backup_item(
+                item,
+                state_sources,
+                timestamp,
+                prefix,
+                backup_backend,
+                uploader,
+                write_manifest,
+                run_dir,
+                selected,
+            ):
+                if item[0].identifier == "data":
+                    state_sources["data"] = persisted_source
+                    return 0
+                return 1
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.load_state",
+                return_value=prior_state,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_get_backend",
+                return_value=backend,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_select_sources",
+                return_value=list(backend.sources),
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_plan_work",
+                return_value=work_items,
+            ), mock.patch(
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_init_s3_client",
+                return_value=object(),
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_make_uploader",
+                return_value=mock.sentinel.uploader,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_backup_item",
+                side_effect=fake_backup_item,
+            ), mock.patch(
+                "btrfs_to_s3.orchestrator.save_state"
+            ) as save_state:
+                self.assertEqual(orchestrator._run_locked(request), 1)
+
+            self.assertEqual(
+                save_state.call_args_list,
+                [
+                    mock.call(
+                        config.global_cfg.state_path,
+                        State(
+                            sources={"data": persisted_source},
+                            last_run_at=prior_state.last_run_at,
+                        ),
+                    )
+                ],
+            )
+
+    def test_backup_marks_run_complete_only_after_all_sources_succeed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = (
+                Path(temp_dir) / "data",
+                Path(temp_dir) / "root",
+            )
+            config = _make_config(temp_dir, subvolumes=paths)
+            orchestrator = BackupOrchestrator(config)
+            request = BackupRequest(
+                dry_run=False,
+                source_names=None,
+                once=False,
+                no_s3=False,
+            )
+            backend = _make_backend(
+                temp_dir,
+                paths=paths,
+                identifiers=("data", "root"),
+            )
+            prior_state = State(last_run_at="20260313T090000Z")
+            first_source = SourceState(
+                last_snapshot=str(
+                    Path(temp_dir)
+                    / "snapshots"
+                    / "data__20260314T150000Z__full"
+                ),
+                last_snapshot_name="data__20260314T150000Z__full",
+                last_snapshot_path=str(
+                    Path(temp_dir)
+                    / "snapshots"
+                    / "data__20260314T150000Z__full"
+                ),
+                last_manifest=(
+                    "backup/subvol/data/full/manifest-20260314T150000Z.json"
+                ),
+                last_full_at="20260314T150000Z",
+            )
+            second_source = SourceState(
+                last_snapshot=str(
+                    Path(temp_dir)
+                    / "snapshots"
+                    / "root__20260314T150000Z__full"
+                ),
+                last_snapshot_name="root__20260314T150000Z__full",
+                last_snapshot_path=str(
+                    Path(temp_dir)
+                    / "snapshots"
+                    / "root__20260314T150000Z__full"
+                ),
+                last_manifest=(
+                    "backup/subvol/root/full/manifest-20260314T150000Z.json"
+                ),
+                last_full_at="20260314T150000Z",
+            )
+            work_items = [
+                (
+                    backend.sources[0],
+                    PlanItem(
+                        source_name="data",
+                        action="full",
+                        parent_snapshot=None,
+                        reason="full_due",
+                    ),
+                    "full",
+                ),
+                (
+                    backend.sources[1],
+                    PlanItem(
+                        source_name="root",
+                        action="full",
+                        parent_snapshot=None,
+                        reason="full_due",
+                    ),
+                    "full",
+                ),
+            ]
+            seen_timestamp: dict[str, str | None] = {"value": None}
+
+            def fake_backup_item(
+                item,
+                state_sources,
+                timestamp,
+                prefix,
+                backup_backend,
+                uploader,
+                write_manifest,
+                run_dir,
+                selected,
+            ):
+                if seen_timestamp["value"] is None:
+                    seen_timestamp["value"] = timestamp
+                if item[0].identifier == "data":
+                    state_sources["data"] = first_source
+                else:
+                    state_sources["root"] = second_source
+                return 0
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator.load_state",
+                return_value=prior_state,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_get_backend",
+                return_value=backend,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_select_sources",
+                return_value=list(backend.sources),
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_plan_work",
+                return_value=work_items,
+            ), mock.patch(
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_init_s3_client",
+                return_value=object(),
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_make_uploader",
+                return_value=mock.sentinel.uploader,
+            ), mock.patch.object(
+                BackupOrchestrator,
+                "_backup_item",
+                side_effect=fake_backup_item,
+            ), mock.patch(
+                "btrfs_to_s3.orchestrator.save_state"
+            ) as save_state:
+                self.assertEqual(orchestrator._run_locked(request), 0)
+
+            self.assertEqual(len(save_state.call_args_list), 3)
+            self.assertEqual(
+                save_state.call_args_list[0],
+                mock.call(
+                    config.global_cfg.state_path,
+                    State(
+                        sources={"data": first_source},
+                        last_run_at=prior_state.last_run_at,
+                    ),
+                ),
+            )
+            self.assertEqual(
+                save_state.call_args_list[1],
+                mock.call(
+                    config.global_cfg.state_path,
+                    State(
+                        sources={
+                            "data": first_source,
+                            "root": second_source,
+                        },
+                        last_run_at=prior_state.last_run_at,
+                    ),
+                ),
+            )
+            self.assertEqual(
+                save_state.call_args_list[2],
+                mock.call(
+                    config.global_cfg.state_path,
+                    State(
+                        sources={
+                            "data": first_source,
+                            "root": second_source,
+                        },
+                        last_run_at=seen_timestamp["value"],
+                    ),
+                ),
+            )
 
     def test_init_s3_client_failure_is_logged(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

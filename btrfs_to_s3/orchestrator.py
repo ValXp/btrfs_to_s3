@@ -160,10 +160,14 @@ class BackupOrchestrator:
             )
             if result != 0:
                 return result
+            self._save_backup_state(
+                state_sources,
+                last_run_at=state.last_run_at,
+            )
 
-        save_state(
-            self.config.global_cfg.state_path,
-            State(sources=state_sources, last_run_at=timestamp),
+        self._save_backup_state(
+            state_sources,
+            last_run_at=timestamp,
         )
         return 0
 
@@ -232,6 +236,17 @@ class BackupOrchestrator:
             if self.config.s3.spool_enabled
             else None,
             spool_size_bytes=self.config.global_cfg.spool_size_bytes,
+        )
+
+    def _save_backup_state(
+        self,
+        state_sources: dict[str, SourceState],
+        *,
+        last_run_at: str | None,
+    ) -> None:
+        save_state(
+            self.config.global_cfg.state_path,
+            State(sources=state_sources, last_run_at=last_run_at),
         )
 
     def _backup_item(
