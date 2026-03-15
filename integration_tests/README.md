@@ -21,7 +21,11 @@ Prerequisites
 
 AWS test bucket/prefix guidance
 - Use a dedicated bucket or a dedicated prefix within a shared bucket.
-- Example prefix: `btrfs-to-s3-test/`
+- Prefer backend-specific prefixes when you share one test bucket, for example
+  `btrfs-to-s3-test/btrfs/` and `btrfs-to-s3-test/zfs/`.
+- The harness S3 verification and cleanup scripts only operate on the
+  configured `subvol/<source>/` prefixes, so sibling backend objects under the
+  same parent prefix are tolerated.
 - Consider a lifecycle rule to expire test objects and control costs.
 - For tests, use a non-Glacier storage class unless you accept restore delays.
 - Archive restore checks require `s3:RestoreObject` and can take hours depending

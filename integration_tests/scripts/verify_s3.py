@@ -19,7 +19,11 @@ from harness.aws import (
 )
 from harness.config import load_config
 from harness.env import load_env
-from harness.filesystem import source_identifiers
+from harness.filesystem import (
+    normalize_s3_prefix,
+    source_identifiers,
+    source_object_prefixes,
+)
 from harness.logs import open_log
 from harness import manifest as manifest_lib
 
@@ -50,12 +54,22 @@ def main() -> int:
         log.write(f"loading config from {config_path}")
         client = create_s3_client(aws_cfg["region"])
         sources = source_identifiers(config)
-        prefix = aws_cfg["prefix"]
-        if prefix and not prefix.endswith("/"):
-            prefix = f"{prefix}/"
-        objects = list_objects(client, aws_cfg["bucket"], prefix)
+        prefix = normalize_s3_prefix(aws_cfg["prefix"])
+        owned_prefixes = source_object_prefixes(config, prefix)
+        objects: list[dict[str, object]] = []
+        missing: list[str] = []
+        for source in sources:
+            source_objects = list_objects(
+                client,
+                aws_cfg["bucket"],
+                owned_prefixes[source],
+            )
+            if not source_objects:
+                missing.append(source)
+                continue
+            objects.extend(source_objects)
         if not objects:
-            log.write("no objects found under prefix", level="ERROR")
+            log.write("no harness-owned objects found under prefix", level="ERROR")
             return 1
 
         errors: list[str] = []
@@ -87,7 +101,6 @@ def main() -> int:
                 log.write(error, level="ERROR")
             return 1
 
-        missing = _missing_sources(objects, prefix, sources)
         if missing:
             for source in missing:
                 log.write(f"missing source objects for {source}", level="ERROR")
@@ -107,28 +120,6 @@ def main() -> int:
 
         log.write(f"verified {len(objects)} objects under {prefix}")
         return 0
-
-
-def _missing_sources(
-    objects: list[dict[str, object]],
-    prefix: str,
-    sources: list[str],
-) -> list[str]:
-    normalized = prefix
-    if normalized and not normalized.endswith("/"):
-        normalized += "/"
-    seen: set[str] = set()
-    for obj in objects:
-        key = obj.get("Key")
-        if not isinstance(key, str):
-            continue
-        if normalized and not key.startswith(normalized):
-            continue
-        remainder = key[len(normalized) :] if normalized else key
-        source, _suffix = _split_source_key(remainder, sources)
-        if source is not None:
-            seen.add(source)
-    return [source for source in sources if source not in seen]
 
 
 def _classify_key(

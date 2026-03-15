@@ -36,6 +36,23 @@ def source_identifiers(config: dict[str, Any]) -> list[str]:
     return [source.identifier for source in source_specs(config)]
 
 
+def normalize_s3_prefix(prefix: str) -> str:
+    if prefix and not prefix.endswith("/"):
+        return f"{prefix}/"
+    return prefix
+
+
+def source_object_prefixes(
+    config: dict[str, Any],
+    s3_prefix: str,
+) -> dict[str, str]:
+    normalized = normalize_s3_prefix(s3_prefix)
+    return {
+        source: f"{normalized}subvol/{source}/"
+        for source in source_identifiers(config)
+    }
+
+
 def source_path(config: dict[str, Any], identifier: str) -> str:
     for source in source_specs(config):
         if source.identifier == identifier:

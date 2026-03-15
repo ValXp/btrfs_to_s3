@@ -1,4 +1,4 @@
-"""Delete all objects under the configured S3 prefix."""
+"""Delete harness-owned objects under the configured S3 prefix."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ if TESTING_DIR not in sys.path:
 from harness.aws import create_s3_client, delete_objects, list_objects
 from harness.config import load_config
 from harness.env import load_env
+from harness.filesystem import source_object_prefixes
 from harness.logs import open_log
 
 
@@ -22,7 +23,9 @@ DEFAULT_CONFIG = os.path.abspath(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Cleanup S3 prefix objects.")
+    parser = argparse.ArgumentParser(
+        description="Cleanup harness-owned S3 prefix objects."
+    )
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--yes", action="store_true")
     args = parser.parse_args()
@@ -46,12 +49,20 @@ def main() -> int:
     with open_log(log_path) as log:
         log.write(f"loading config from {config_path}")
         client = create_s3_client(aws_cfg["region"])
-        objects = list_objects(client, aws_cfg["bucket"], aws_cfg["prefix"])
+        objects: list[dict[str, object]] = []
+        for source_prefix in source_object_prefixes(config, aws_cfg["prefix"]).values():
+            objects.extend(list_objects(client, aws_cfg["bucket"], source_prefix))
         if not objects:
-            log.write("no objects to delete under prefix")
+            log.write("no harness-owned objects to delete under prefix")
             return 0
 
-        keys = [obj["Key"] for obj in objects]
+        keys = list(
+            dict.fromkeys(
+                obj["Key"]
+                for obj in objects
+                if isinstance(obj.get("Key"), str)
+            )
+        )
         result = delete_objects(client, aws_cfg["bucket"], keys)
         deleted = result.get("deleted", [])
         errors = result.get("errors", [])
