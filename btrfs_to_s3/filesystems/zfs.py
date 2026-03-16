@@ -192,7 +192,7 @@ class ZFSRestoreOperations(RestoreOperations):
     def __init__(
         self,
         *,
-        receive_parent_dataset: str,
+        receive_parent_dataset: str | None,
         restore_base_dir: Path,
         pool_name: str | None = None,
         mount_root: Path | None = None,
@@ -413,7 +413,10 @@ class ZFSRestoreOperations(RestoreOperations):
         return mount_path / ".zfs" / "snapshot" / snapshot_name_value
 
     def _dataset_mount_path(self, dataset: str) -> Path | None:
-        relative = _dataset_relative_to_parent(self.receive_parent_dataset, dataset)
+        relative = _dataset_relative_to_parent(
+            self._require_receive_parent_dataset(),
+            dataset,
+        )
         if relative is None:
             return None
         if relative == ".":
@@ -423,7 +426,10 @@ class ZFSRestoreOperations(RestoreOperations):
     def _verify_clone_dataset(self, source_name: str, dataset: str) -> str:
         token_source = source_name or dataset
         token = _dataset_token(token_source)
-        return f"{self.receive_parent_dataset}/__verify__{token}__{uuid.uuid4().hex}"
+        return (
+            f"{self._require_receive_parent_dataset()}"
+            f"/__verify__{token}__{uuid.uuid4().hex}"
+        )
 
     def _verify_source_key(self, source: Path) -> str:
         return os.path.abspath(str(source))
@@ -478,12 +484,19 @@ class ZFSRestoreOperations(RestoreOperations):
             raise RestoreBackendError(
                 f"restore target must live under {self.restore_base_dir}: {target}"
             )
-        dataset = self.receive_parent_dataset
+        dataset = self._require_receive_parent_dataset()
         if relative == ".":
             return dataset
         for part in Path(relative).parts:
             dataset = f"{dataset}/{part}"
         return dataset
+
+    def _require_receive_parent_dataset(self) -> str:
+        if not self.receive_parent_dataset:
+            raise RestoreBackendError(
+                "zfs.receive_parent_dataset is required for ZFS restore operations"
+            )
+        return self.receive_parent_dataset
 
 
 def _command_env() -> dict[str, str]:

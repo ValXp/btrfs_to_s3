@@ -198,6 +198,10 @@ restore_timeout_seconds = 259200
 restore_tier = "Standard"
 ```
 
+`zfs.receive_parent_dataset` can be omitted for backup-only ZFS configs. Keep
+it set when you plan to restore on that host or want clone-based ZFS content
+verification fallback.
+
 You can copy `config.example.toml` as a starting point.
 
 ### Configuration reference
@@ -229,7 +233,10 @@ You can copy `config.example.toml` as a starting point.
 - `zfs.pool_name`: required when `filesystem.backend = "zfs"`; pool name used to qualify datasets.
 - `zfs.mount_root`: required for ZFS; absolute mount root for source datasets and restore target mapping.
 - `zfs.source_datasets`: required for ZFS; list of dataset names to back up. Use fully qualified names such as `tank/data` to keep CLI `--source` values obvious.
-- `zfs.receive_parent_dataset`: required for ZFS; dataset under which restores are received.
+- `zfs.receive_parent_dataset`: optional for backup-only ZFS configs;
+  dataset under which restores are received and temporary verification clones
+  are created. Restore flows that need it fail clearly when it is not
+  configured.
 - `zfs.snapshot_prefix`: required for ZFS; prefix applied to generated snapshot names.
 
 `s3`:
@@ -259,7 +266,8 @@ You can copy `config.example.toml` as a starting point.
 - ZFS restores must target a path under `restore.target_base_dir`. The relative
   path beneath that base is mapped onto child datasets of
   `zfs.receive_parent_dataset`, then the restored dataset is made writable and
-  verified with `zfs get`.
+  verified with `zfs get`. `zfs.receive_parent_dataset` is therefore required
+  for ZFS restores even though backup-only configs may omit it.
 
 ### Verification semantics
 
@@ -272,6 +280,8 @@ You can copy `config.example.toml` as a starting point.
 - For ZFS, the application first tries `.zfs/snapshot/<snapshot-name>` as that
   source path. If the path is not available, it creates a temporary clone under
   `zfs.receive_parent_dataset`, verifies against the clone, then destroys it.
+  That clone fallback is unavailable when `zfs.receive_parent_dataset` is not
+  configured.
 - The integration harness's
   [verify_restore.py](/root/btrfs_to_s3/integration_tests/scripts/verify_restore.py)
   uses the same ZFS strategy during harness verification.

@@ -28,6 +28,19 @@ class HarnessConfigTests(unittest.TestCase):
         self.assertEqual(config["zfs"]["pool_name"], "btrfs_to_s3_test")
         self.assertEqual(config["zfs"]["source_datasets"], ["data", "home"])
 
+    def test_loads_backup_only_zfs_config_without_receive_parent_dataset(self) -> None:
+        original = (CONFIG_DIR / "test_zfs.toml").read_text(encoding="utf-8")
+        backup_only = original.replace('receive_parent_dataset = "restore"\n', "")
+
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as handle:
+            handle.write(backup_only)
+            path = handle.name
+
+        config = harness_config.load_config(path)
+
+        self.assertEqual(config["filesystem"]["backend"], "zfs")
+        self.assertNotIn("receive_parent_dataset", config["zfs"])
+
     def test_rejects_zfs_config_without_backend_selector(self) -> None:
         invalid_toml = textwrap.dedent(
             """

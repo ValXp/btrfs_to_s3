@@ -49,7 +49,11 @@ def main() -> int:
 
 def _run_probe(zfs_cfg: dict[str, object], log) -> None:
     source_dataset = support.source_dataset(zfs_cfg)
-    receive_dataset = f"{support.receive_dataset(zfs_cfg, source_dataset)}-incremental"
+    purpose = "the standalone incremental send/receive probe"
+    receive_dataset = (
+        f"{support.receive_dataset(zfs_cfg, source_dataset, purpose=purpose)}"
+        "-incremental"
+    )
     prefix = zfs_cfg["snapshot_prefix"]
 
     base_snapshot = support.snapshot_name(source_dataset, prefix, "base")

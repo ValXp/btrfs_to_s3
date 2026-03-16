@@ -392,6 +392,15 @@ class ConfigTests(unittest.TestCase):
         assert config.zfs is not None
         self.assertEqual(config.zfs.source_datasets, ())
 
+    def test_allows_zfs_without_receive_parent_dataset(self) -> None:
+        data = self._valid_zfs_data()
+        del data["zfs"]["receive_parent_dataset"]
+
+        config = config_module.Config.from_dict(data)
+
+        assert config.zfs is not None
+        self.assertIsNone(config.zfs.receive_parent_dataset)
+
     def test_rejects_relative_zfs_mount_root(self) -> None:
         data = self._valid_zfs_data()
         data["zfs"]["mount_root"] = "tank"

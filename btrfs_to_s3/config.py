@@ -84,7 +84,7 @@ class ZFSConfig:
     pool_name: str
     mount_root: Path
     source_datasets: tuple[str, ...]
-    receive_parent_dataset: str
+    receive_parent_dataset: str | None
     snapshot_prefix: str
 
 
@@ -386,7 +386,7 @@ def _load_zfs_config(raw: Any, backend: str) -> ZFSConfig | None:
             _require_non_empty_string(mount_root, "zfs.mount_root")
         ),
         source_datasets=tuple(normalized_sources),
-        receive_parent_dataset=_require_non_empty_string(
+        receive_parent_dataset=_load_optional_non_empty_string(
             raw.get("receive_parent_dataset"),
             "zfs.receive_parent_dataset",
         ),
@@ -400,6 +400,14 @@ def _load_zfs_config(raw: Any, backend: str) -> ZFSConfig | None:
 def _require_non_empty_string(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise ConfigError(f"{field} is required")
+    return value
+
+
+def _load_optional_non_empty_string(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"{field} must be a non-empty string when set")
     return value
 
 
@@ -449,8 +457,6 @@ def _validate_zfs_config(config: ZFSConfig) -> None:
         config.pool_name,
         config.source_datasets,
     )
-    if not config.receive_parent_dataset:
-        raise ConfigError("zfs.receive_parent_dataset is required")
     if not config.snapshot_prefix:
         raise ConfigError("zfs.snapshot_prefix is required")
 

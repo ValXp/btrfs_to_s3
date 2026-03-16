@@ -48,8 +48,13 @@ def main() -> int:
 
 def _run_probe(zfs_cfg: dict[str, object], log) -> None:
     source_dataset = support.source_dataset(zfs_cfg)
-    receive_parent = support.receive_parent_dataset(zfs_cfg)
-    receive_dataset = support.receive_dataset(zfs_cfg, source_dataset)
+    purpose = "the standalone full send/receive probe"
+    receive_parent = support.require_receive_parent_dataset(zfs_cfg, purpose=purpose)
+    receive_dataset = support.receive_dataset(
+        zfs_cfg,
+        source_dataset,
+        purpose=purpose,
+    )
     prefix = zfs_cfg["snapshot_prefix"]
     source_snapshot = support.snapshot_name(source_dataset, prefix, "full")
     received_snapshot = support.snapshot_name(receive_dataset, prefix, "full")

@@ -55,10 +55,13 @@ def main() -> int:
         _dataset_name(zfs_cfg["pool_name"], name)
         for name in zfs_cfg["source_datasets"]
     ]
-    receive_parent_dataset = _dataset_name(
-        zfs_cfg["pool_name"],
-        zfs_cfg["receive_parent_dataset"],
-    )
+    receive_parent_raw = zfs_cfg.get("receive_parent_dataset")
+    receive_parent_dataset = None
+    if isinstance(receive_parent_raw, str):
+        receive_parent_dataset = _dataset_name(
+            zfs_cfg["pool_name"],
+            receive_parent_raw,
+        )
     state = {
         "pool_name": zfs_cfg["pool_name"],
         "pool_file": pool_file,
@@ -93,9 +96,15 @@ def main() -> int:
             _write_pool_state(state_path, state)
             log.write(f"stored pool state in {state_path}")
 
-            datasets = list(
-                _iter_unique(source_datasets + [receive_parent_dataset])
-            )
+            datasets = list(_iter_unique(source_datasets))
+            if receive_parent_dataset is None:
+                log.write(
+                    "no receive_parent_dataset configured; skipping restore dataset creation"
+                )
+            else:
+                datasets = list(
+                    _iter_unique(source_datasets + [receive_parent_dataset])
+                )
             for dataset in datasets:
                 _ensure_dataset(
                     dataset,

@@ -79,6 +79,17 @@ class HarnessFilesystemTests(unittest.TestCase):
             str(Path(tmpdir) / "integration_tests" / "run" / "zfs" / "mnt" / "restore"),
         )
 
+    def test_restore_base_dir_requires_receive_parent_dataset_for_zfs_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            del config["zfs"]["receive_parent_dataset"]
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "zfs.receive_parent_dataset is required for ZFS restore operations",
+            ):
+                harness_filesystem.restore_base_dir(config)
+
 
 class SeedDataScriptTests(unittest.TestCase):
     def test_seed_data_writes_into_zfs_mount_paths(self) -> None:
@@ -420,6 +431,37 @@ class RunRestoreScriptTests(unittest.TestCase):
         self.assertTrue(run_tool_mock.call_args.kwargs["restore_only"])
         self.assertEqual(payload["source"], "tank/data")
 
+    def test_main_fails_cleanly_when_receive_parent_dataset_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            del config["zfs"]["receive_parent_dataset"]
+            config_path = str(Path(tmpdir) / "test_zfs.toml")
+            log = RecordingLog()
+
+            with mock.patch.object(
+                run_restore, "load_config", return_value=config
+            ), mock.patch.object(
+                run_restore, "open_log", return_value=log
+            ), mock.patch.object(
+                run_restore,
+                "run_tool",
+            ) as run_tool_mock, mock.patch.object(
+                run_restore.sys,
+                "argv",
+                ["run_restore.py", "--config", config_path, "--source", "tank/data"],
+            ):
+                result = run_restore.main()
+
+        self.assertEqual(result, 1)
+        run_tool_mock.assert_not_called()
+        self.assertIn(
+            (
+                "ERROR",
+                "zfs.receive_parent_dataset is required for ZFS restore operations",
+            ),
+            log.entries,
+        )
+
 
 class VerifyRestoreScriptTests(unittest.TestCase):
     def test_resolve_zfs_source_snapshot_uses_dot_zfs_snapshot_mount(self) -> None:
@@ -478,6 +520,26 @@ class VerifyRestoreScriptTests(unittest.TestCase):
         self.assertEqual(result.path, str(clone_dir))
         self.assertEqual(result.cleanup_dataset, "tank/restore/__verify__tank__data__abc123")
         clone_mock.assert_called_once()
+
+    def test_resolve_zfs_source_snapshot_requires_receive_parent_dataset_for_clone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            del config["zfs"]["receive_parent_dataset"]
+            snapshot_name = "probe-data__20260313T221500Z__full"
+
+            with mock.patch.object(
+                verify_restore.zfs_harness,
+                "list_snapshots",
+                return_value=[f"tank/data@{snapshot_name}"],
+            ), self.assertRaisesRegex(
+                ValueError,
+                "zfs.receive_parent_dataset is required for ZFS restore operations",
+            ):
+                verify_restore._resolve_source_snapshot(
+                    None,
+                    config,
+                    "tank/data",
+                )
 
     def test_verify_metadata_checks_zfs_dataset_properties(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -657,6 +719,63 @@ class VerifyRestoreScriptTests(unittest.TestCase):
             log.entries,
         )
         self.assertIn(("INFO", "restore verification passed"), log.entries)
+
+    def test_main_fails_cleanly_when_verify_needs_receive_parent_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            del config["zfs"]["receive_parent_dataset"]
+            config_path = str(Path(tmpdir) / "test_zfs.toml")
+            mount_root = Path(config["zfs"]["mount_root"])
+            snapshot_name = "probe-data__20260313T221500Z__full"
+            source_dir = mount_root / "data" / ".zfs" / "snapshot" / snapshot_name
+            target_dir = mount_root / "restore" / "data-target"
+            source_dir.mkdir(parents=True)
+            target_dir.mkdir(parents=True)
+            metadata_path = (
+                Path(config["paths"]["run_dir"]) / verify_restore.RESTORE_TARGETS_FILE
+            )
+            metadata_path.parent.mkdir(parents=True, exist_ok=True)
+            metadata_path.write_text(
+                json.dumps(
+                    {
+                        "targets": [
+                            {
+                                "source": "tank/data",
+                                "target_path": str(target_dir),
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            log = RecordingLog()
+
+            with mock.patch.object(
+                verify_restore, "load_config", return_value=config
+            ), mock.patch.object(
+                verify_restore, "open_log", return_value=log
+            ), mock.patch.object(
+                verify_restore.zfs_harness,
+                "list_snapshots",
+                return_value=[f"tank/data@{snapshot_name}"],
+            ), mock.patch.object(
+                verify_restore, "_verify_content"
+            ) as verify_content_mock, mock.patch.object(
+                verify_restore.sys,
+                "argv",
+                ["verify_restore.py", "--config", config_path, "--source", "tank/data"],
+            ):
+                result = verify_restore.main()
+
+        self.assertEqual(result, 1)
+        verify_content_mock.assert_not_called()
+        self.assertIn(
+            (
+                "ERROR",
+                "zfs.receive_parent_dataset is required for ZFS restore operations",
+            ),
+            log.entries,
+        )
 
     def test_cleanup_zfs_verify_clone_retries_busy_destroy(self) -> None:
         busy_error = subprocess.CalledProcessError(

@@ -74,9 +74,10 @@ def create_filesystem_backend(
             qualify_zfs_dataset(pool_name, dataset)
             for dataset in config.zfs.source_datasets
         )
-        receive_parent_dataset = qualify_zfs_dataset(
-            pool_name,
-            config.zfs.receive_parent_dataset,
+        receive_parent_dataset = (
+            qualify_zfs_dataset(pool_name, config.zfs.receive_parent_dataset)
+            if config.zfs.receive_parent_dataset is not None
+            else None
         )
         sources = tuple(
             BackupSource(

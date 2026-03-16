@@ -35,6 +35,8 @@ Configuration
 - `integration_tests/config/test.toml` controls harness settings and S3 parameters.
 - `integration_tests/config/test_zfs.toml` is the backend-aware template for a
   disposable file-backed ZFS pool rooted under `integration_tests/run/zfs/`.
+  It keeps `receive_parent_dataset` configured because the default ZFS harness
+  path includes restore and restore verification.
 - `integration_tests/config/test_large.toml` forces multi-chunk uploads with a smaller
   chunk size and larger dataset defaults.
 - `integration_tests/config/test_archive.toml` uses an archival storage class and overrides
@@ -52,7 +54,10 @@ Config structure
   - `[btrfs]` with `loopback_size_gib`, `mount_options`, and `subvolumes`
 - ZFS-specific config:
   - `[zfs]` with `pool_name`, `pool_file`, `pool_size_gib`, `mount_root`,
-    `source_datasets`, `receive_parent_dataset`, and `snapshot_prefix`
+    `source_datasets`, and `snapshot_prefix`
+  - `receive_parent_dataset` is optional for backup-only configs, but the
+    restore flow plus the standalone full/incremental send/receive probes
+    require it
   - optional `zpool_create_args` and `zfs_create_args` for pool or dataset defaults
 
 How the ZFS harness differs
@@ -126,9 +131,9 @@ Quickstart
    - `sudo -E python3 integration_tests/scripts/teardown_zfs.py --config integration_tests/config/test_zfs.toml`
 7. Run the standalone ZFS probe scripts manually when you need raw send/receive
    or retention diagnostics outside the application flow:
-   - `python3 integration_tests/scripts/run_zfs_snapshot_send_receive.py --config integration_tests/config/test_zfs.toml`
-   - `python3 integration_tests/scripts/run_zfs_incremental.py --config integration_tests/config/test_zfs.toml`
-   - `python3 integration_tests/scripts/run_zfs_retention.py --config integration_tests/config/test_zfs.toml`
+   - `python3 integration_tests/scripts/run_zfs_snapshot_send_receive.py --config integration_tests/config/test_zfs.toml` requires `zfs.receive_parent_dataset`
+   - `python3 integration_tests/scripts/run_zfs_incremental.py --config integration_tests/config/test_zfs.toml` requires `zfs.receive_parent_dataset`
+   - `python3 integration_tests/scripts/run_zfs_retention.py --config integration_tests/config/test_zfs.toml` works with backup-only configs that omit `zfs.receive_parent_dataset`
 8. Run the multi-chunk scenario:
    - `sudo -E python3 integration_tests/scripts/run_large.py --config integration_tests/config/test_large.toml`
    - `--include-large` is only defined for the Btrfs harness right now.

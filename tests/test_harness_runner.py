@@ -93,6 +93,18 @@ class HarnessRunnerTests(unittest.TestCase):
         self.assertIn('receive_parent_dataset = "tank/restore"', rendered)
         self.assertNotIn("source_datasets =", rendered)
 
+    def test_render_backup_only_zfs_tool_config_omits_restore_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            del config["zfs"]["receive_parent_dataset"]
+
+            rendered = runner._render_tool_config(config)
+
+        self.assertIn('[filesystem]\nbackend = "zfs"', rendered)
+        self.assertIn('source_datasets = ["tank/data", "tank/home"]', rendered)
+        self.assertNotIn("receive_parent_dataset =", rendered)
+        self.assertNotIn("[restore]", rendered)
+
 
 class RunAllTests(unittest.TestCase):
     def test_build_steps_keeps_btrfs_flow_and_lifecycle(self) -> None:

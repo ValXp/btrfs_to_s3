@@ -25,6 +25,7 @@ from harness.filesystem import (
     source_identifiers,
     target_token,
     zfs_dataset_mount_path,
+    zfs_receive_parent_dataset,
     zfs_snapshot_mount_path,
 )
 from harness.logs import open_log
@@ -252,13 +253,7 @@ def _resolve_zfs_source_snapshot(
 
 
 def _verify_clone_dataset(config: dict, source: str) -> str:
-    zfs_cfg = config["zfs"]
-    pool_name = zfs_cfg["pool_name"]
-    receive_parent = zfs_cfg["receive_parent_dataset"]
-    if receive_parent == pool_name or receive_parent.startswith(pool_name + "/"):
-        parent_dataset = receive_parent
-    else:
-        parent_dataset = f"{pool_name}/{receive_parent}"
+    parent_dataset = zfs_receive_parent_dataset(config)
     token = target_token(source)
     return f"{parent_dataset}/__verify__{token}__{uuid.uuid4().hex}"
 

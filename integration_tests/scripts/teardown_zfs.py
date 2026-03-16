@@ -44,6 +44,9 @@ def main() -> int:
         log.write(f"loading config from {config_path}")
         state = _load_pool_state(state_path, log)
         pool_name = _state_value(state, "pool_name", zfs_cfg["pool_name"])
+        pool_file = os.path.abspath(
+            _state_value(state, "pool_file", zfs_cfg["pool_file"])
+        )
         mount_root = os.path.abspath(
             _state_value(state, "mount_root", zfs_cfg["mount_root"])
         )
@@ -52,6 +55,7 @@ def main() -> int:
         try:
             success = _destroy_pool(
                 pool_name=pool_name,
+                pool_file=pool_file,
                 mount_root=mount_root,
                 run_dir=run_dir,
                 log=log,
@@ -65,6 +69,7 @@ def main() -> int:
 def _destroy_pool(
     *,
     pool_name: str,
+    pool_file: str,
     mount_root: str,
     run_dir: str,
     log,
@@ -74,6 +79,12 @@ def _destroy_pool(
         log.write(f"destroyed pool {pool_name}")
         return True
     except subprocess.CalledProcessError as exc:
+        if _is_busy_pool_error(exc):
+            log.write(
+                f"pool {pool_name} is busy; exporting and removing backing file",
+                level="WARN",
+            )
+            return _export_busy_pool(pool_name, pool_file, log)
         if not _is_missing_pool_error(exc):
             log.write(_format_error("zpool destroy", exc), level="ERROR")
             return False
@@ -102,6 +113,25 @@ def _destroy_pool(
             return True
         log.write(_format_error("zpool destroy", exc), level="ERROR")
         return False
+
+
+def _export_busy_pool(pool_name: str, pool_file: str, log) -> bool:
+    try:
+        zfs.export_pool(pool_name)
+        log.write(f"exported pool {pool_name}")
+    except subprocess.CalledProcessError as exc:
+        log.write(_format_error("zpool export", exc), level="ERROR")
+        return False
+
+    try:
+        os.remove(pool_file)
+        log.write(f"removed backing file {pool_file}")
+    except FileNotFoundError:
+        log.write(f"backing file already absent {pool_file}", level="WARN")
+    except OSError as exc:
+        log.write(f"remove backing file failed: {exc}", level="ERROR")
+        return False
+    return True
 
 
 def _load_pool_state(path: str, log) -> dict[str, Any] | None:
@@ -149,6 +179,11 @@ def _format_error(label: str, exc: subprocess.CalledProcessError) -> str:
 def _is_missing_pool_error(exc: subprocess.CalledProcessError) -> bool:
     stderr = (exc.stderr or "").lower()
     return "no such pool" in stderr or "no pools available" in stderr
+
+
+def _is_busy_pool_error(exc: subprocess.CalledProcessError) -> bool:
+    stderr = (exc.stderr or "").lower()
+    return "pool is busy" in stderr
 
 
 if __name__ == "__main__":

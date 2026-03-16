@@ -38,16 +38,37 @@ def source_dataset(zfs_cfg: dict[str, object], index: int = 0) -> str:
     return dataset_name(pool_name, source_datasets[index])
 
 
-def receive_parent_dataset(zfs_cfg: dict[str, object]) -> str:
-    """Return the fully-qualified receive parent dataset name."""
+def receive_parent_dataset(zfs_cfg: dict[str, object]) -> str | None:
+    """Return the fully-qualified receive parent dataset name when configured."""
     pool_name = _str_value(zfs_cfg, "pool_name")
-    receive_parent = _str_value(zfs_cfg, "receive_parent_dataset")
+    receive_parent = zfs_cfg.get("receive_parent_dataset")
+    if receive_parent is None:
+        return None
+    if not isinstance(receive_parent, str):
+        raise TypeError("expected 'receive_parent_dataset' to be a string")
     return dataset_name(pool_name, receive_parent)
 
 
-def receive_dataset(zfs_cfg: dict[str, object], source: str) -> str:
+def require_receive_parent_dataset(
+    zfs_cfg: dict[str, object],
+    *,
+    purpose: str,
+) -> str:
+    """Return the receive parent dataset or raise a clear probe error."""
+    receive_parent = receive_parent_dataset(zfs_cfg)
+    if receive_parent is None:
+        raise RuntimeError(f"zfs.receive_parent_dataset is required for {purpose}")
+    return receive_parent
+
+
+def receive_dataset(
+    zfs_cfg: dict[str, object],
+    source: str,
+    *,
+    purpose: str,
+) -> str:
     """Return the receive dataset used for the provided source dataset."""
-    parent = receive_parent_dataset(zfs_cfg)
+    parent = require_receive_parent_dataset(zfs_cfg, purpose=purpose)
     leaf = source.rsplit("/", 1)[-1]
     return f"{parent}/{leaf}"
 

@@ -150,6 +150,43 @@ class FullZFSProbeScriptTests(unittest.TestCase):
             log.entries,
         )
 
+    def test_full_probe_requires_receive_parent_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _probe_config(tmpdir, include_receive_parent=False)
+            log = RecordingLog()
+
+            with mock.patch.object(
+                full_probe.support,
+                "load_zfs_config",
+                return_value=config,
+            ), mock.patch.object(
+                full_probe, "open_log", return_value=log
+            ), mock.patch.object(
+                full_probe.support, "write_dataset_text"
+            ) as write_mock, mock.patch.object(
+                full_probe.support, "stream_send_receive"
+            ) as stream_mock, mock.patch.object(
+                full_probe.sys,
+                "argv",
+                [
+                    "run_zfs_snapshot_send_receive.py",
+                    "--config",
+                    str(Path(tmpdir) / "test_zfs.toml"),
+                ],
+            ):
+                result = full_probe.main()
+
+        self.assertEqual(result, 1)
+        write_mock.assert_not_called()
+        stream_mock.assert_not_called()
+        self.assertIn(
+            (
+                "ERROR",
+                "full send/receive probe failed: zfs.receive_parent_dataset is required for the standalone full send/receive probe",
+            ),
+            log.entries,
+        )
+
 
 class IncrementalZFSProbeScriptTests(unittest.TestCase):
     def test_incremental_probe_runs_full_then_incremental_send(self) -> None:
@@ -278,11 +315,52 @@ class IncrementalZFSProbeScriptTests(unittest.TestCase):
             log.entries,
         )
 
+    def test_incremental_probe_requires_receive_parent_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _probe_config(tmpdir, include_receive_parent=False)
+            log = RecordingLog()
+
+            with mock.patch.object(
+                incremental_probe.support,
+                "load_zfs_config",
+                return_value=config,
+            ), mock.patch.object(
+                incremental_probe, "open_log", return_value=log
+            ), mock.patch.object(
+                incremental_probe.support, "write_dataset_text"
+            ) as write_mock, mock.patch.object(
+                incremental_probe.support, "stream_send_receive"
+            ) as stream_mock, mock.patch.object(
+                incremental_probe.sys,
+                "argv",
+                [
+                    "run_zfs_incremental.py",
+                    "--config",
+                    str(Path(tmpdir) / "test_zfs.toml"),
+                ],
+            ):
+                result = incremental_probe.main()
+
+        self.assertEqual(result, 1)
+        write_mock.assert_not_called()
+        stream_mock.assert_not_called()
+        self.assertIn(
+            (
+                "ERROR",
+                "incremental probe failed: zfs.receive_parent_dataset is required for the standalone incremental send/receive probe",
+            ),
+            log.entries,
+        )
+
 
 class RetentionZFSProbeScriptTests(unittest.TestCase):
     def test_retention_probe_prunes_parent_and_logs_expected_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            config = _probe_config(tmpdir, retention_snapshots=2)
+            config = _probe_config(
+                tmpdir,
+                retention_snapshots=2,
+                include_receive_parent=False,
+            )
             log = RecordingLog()
             source_dataset = "tank/data"
             oldest_snapshot = "tank/data@probe-retention-1"
@@ -404,16 +482,23 @@ class RetentionZFSProbeScriptTests(unittest.TestCase):
         )
 
 
-def _probe_config(tmpdir: str, *, retention_snapshots: int = 2) -> dict[str, object]:
+def _probe_config(
+    tmpdir: str,
+    *,
+    retention_snapshots: int = 2,
+    include_receive_parent: bool = True,
+) -> dict[str, object]:
     logs_dir = Path(tmpdir) / "integration_tests" / "run" / "zfs" / "logs"
+    zfs_config: dict[str, object] = {
+        "pool_name": "tank",
+        "source_datasets": ["data"],
+        "snapshot_prefix": "probe",
+    }
+    if include_receive_parent:
+        zfs_config["receive_parent_dataset"] = "restore"
     return {
         "paths": {"logs_dir": str(logs_dir)},
-        "zfs": {
-            "pool_name": "tank",
-            "source_datasets": ["data"],
-            "receive_parent_dataset": "restore",
-            "snapshot_prefix": "probe",
-        },
+        "zfs": zfs_config,
         "backup": {"retention_snapshots": retention_snapshots},
     }
 

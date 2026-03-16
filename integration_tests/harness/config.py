@@ -107,7 +107,8 @@ def _validate_zfs_config(data: dict[str, Any], path: str) -> None:
     _require_int(zfs, "pool_size_gib", path, "zfs", min_value=1)
     _require_str(zfs, "mount_root", path, "zfs")
     _require_str(zfs, "snapshot_prefix", path, "zfs")
-    _require_str(zfs, "receive_parent_dataset", path, "zfs")
+    if "receive_parent_dataset" in zfs:
+        _require_str(zfs, "receive_parent_dataset", path, "zfs")
     _require_list_str(zfs, "source_datasets", path, "zfs")
     _require_optional_list_str(zfs, "zpool_create_args", path, "zfs")
     _require_optional_list_str(zfs, "zfs_create_args", path, "zfs")

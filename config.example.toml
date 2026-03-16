@@ -34,6 +34,8 @@ paths = ["/srv/data", "/srv/home"]
 # mount_root = "/tank"
 # source_datasets = ["tank/data", "tank/home"]
 # receive_parent_dataset = "tank/restore"
+# Optional for backup-only configs; required for restore targets and clone-based
+# ZFS verification fallback.
 # snapshot_prefix = "btrfs-to-s3"
 #
 # Use fully qualified dataset names so CLI --source values are obvious.
@@ -51,8 +53,8 @@ sse = "AES256"
 
 [restore]
 target_base_dir = "/srv/restore"
-# For ZFS, set target_base_dir to the mounted path of zfs.receive_parent_dataset,
-# for example "/tank/restore".
+# For ZFS, when receive_parent_dataset is configured, set target_base_dir to its
+# mounted path, for example "/tank/restore".
 # When verification is enabled for ZFS, the application prefers
 # ".zfs/snapshot/<name>" and falls back to a temporary clone under
 # zfs.receive_parent_dataset if needed.

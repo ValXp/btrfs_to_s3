@@ -143,6 +143,77 @@ class SetupZFSScriptTests(unittest.TestCase):
                     ],
                 )
 
+    def test_setup_skips_restore_dataset_when_not_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            del config["zfs"]["receive_parent_dataset"]
+            state_path = Path(config["paths"]["run_dir"]) / setup_zfs.POOL_STATE_FILE
+            log = RecordingLog()
+            zfs_mock = mock.Mock()
+            zfs_mock.create_backing_file.return_value = config["zfs"]["pool_file"]
+            zfs_mock.create_pool.return_value = config["zfs"]["pool_name"]
+
+            with mock.patch.object(setup_zfs, "load_config", return_value=config), mock.patch.object(
+                setup_zfs, "open_log", return_value=log
+            ), mock.patch.object(setup_zfs, "zfs", zfs_mock), mock.patch.object(
+                setup_zfs, "_chown_for_user"
+            ), mock.patch.object(
+                setup_zfs.sys,
+                "argv",
+                ["setup_zfs.py", "--config", str(Path(tmpdir) / "test_zfs.toml")],
+            ):
+                result = setup_zfs.main()
+                self.assertEqual(result, 0)
+                self.assertEqual(
+                    zfs_mock.mock_calls,
+                    [
+                        mock.call.create_backing_file(
+                            config["zfs"]["pool_file"],
+                            config["zfs"]["pool_size_gib"],
+                            run_dir=config["paths"]["run_dir"],
+                        ),
+                        mock.call.create_pool(
+                            config["zfs"]["pool_name"],
+                            config["zfs"]["pool_file"],
+                            config["zfs"]["mount_root"],
+                            create_args=config["zfs"]["zpool_create_args"],
+                            run_dir=config["paths"]["run_dir"],
+                        ),
+                        mock.call.create_dataset(
+                            f'{config["zfs"]["pool_name"]}/data',
+                            create_args=(
+                                *config["zfs"]["zfs_create_args"],
+                                "-o",
+                                "snapdir=visible",
+                            ),
+                        ),
+                        mock.call.create_dataset(
+                            f'{config["zfs"]["pool_name"]}/home',
+                            create_args=(
+                                *config["zfs"]["zfs_create_args"],
+                                "-o",
+                                "snapdir=visible",
+                            ),
+                        ),
+                    ],
+                )
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertIsNone(state["receive_parent_dataset"])
+                self.assertEqual(
+                    state["datasets"],
+                    [
+                        f'{config["zfs"]["pool_name"]}/data',
+                        f'{config["zfs"]["pool_name"]}/home',
+                    ],
+                )
+                self.assertIn(
+                    (
+                        "INFO",
+                        "no receive_parent_dataset configured; skipping restore dataset creation",
+                    ),
+                    log.entries,
+                )
+
     def test_setup_imports_pool_when_create_reports_existing_pool(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _zfs_config(tmpdir)
@@ -290,6 +361,58 @@ class TeardownZFSScriptTests(unittest.TestCase):
             config["zfs"]["pool_name"],
             config["zfs"]["mount_root"],
             run_dir=config["paths"]["run_dir"],
+        )
+
+    def test_teardown_exports_busy_pool_and_removes_backing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            state_path = Path(config["paths"]["run_dir"]) / teardown_zfs.POOL_STATE_FILE
+            pool_file = Path(config["zfs"]["pool_file"])
+            pool_file.parent.mkdir(parents=True, exist_ok=True)
+            pool_file.write_text("pool\n", encoding="utf-8")
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "pool_name": config["zfs"]["pool_name"],
+                        "pool_file": config["zfs"]["pool_file"],
+                        "mount_root": config["zfs"]["mount_root"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            log = RecordingLog()
+            busy_error = subprocess.CalledProcessError(
+                1,
+                ["zpool", "destroy"],
+                stderr="cannot destroy 'tank': pool is busy",
+            )
+            zfs_mock = mock.Mock()
+            zfs_mock.destroy_pool.side_effect = busy_error
+
+            with mock.patch.object(
+                teardown_zfs, "load_config", return_value=config
+            ), mock.patch.object(
+                teardown_zfs, "open_log", return_value=log
+            ), mock.patch.object(
+                teardown_zfs, "zfs", zfs_mock
+            ), mock.patch.object(
+                teardown_zfs.sys,
+                "argv",
+                ["teardown_zfs.py", "--config", str(Path(tmpdir) / "test_zfs.toml")],
+            ):
+                result = teardown_zfs.main()
+
+        self.assertEqual(result, 0)
+        zfs_mock.export_pool.assert_called_once_with(config["zfs"]["pool_name"])
+        self.assertFalse(pool_file.exists())
+        self.assertFalse(state_path.exists())
+        self.assertIn(
+            (
+                "WARN",
+                "pool tank is busy; exporting and removing backing file",
+            ),
+            log.entries,
         )
         self.assertFalse(state_path.exists())
 

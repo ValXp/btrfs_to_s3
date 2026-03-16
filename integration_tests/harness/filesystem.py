@@ -8,6 +8,11 @@ from typing import Any
 import os
 
 
+_ZFS_RESTORE_PARENT_REQUIRED = (
+    "zfs.receive_parent_dataset is required for ZFS restore operations"
+)
+
+
 @dataclass(frozen=True)
 class SourceSpec:
     identifier: str
@@ -75,7 +80,7 @@ def restore_base_dir(config: dict[str, Any]) -> str:
     mount_root = os.path.abspath(zfs_cfg["mount_root"])
     dataset_path = _zfs_dataset_mount_path(
         zfs_cfg["pool_name"],
-        zfs_cfg["receive_parent_dataset"],
+        zfs_receive_parent_dataset(config),
     )
     return os.path.join(mount_root, dataset_path)
 
@@ -90,11 +95,7 @@ def restore_target_dataset(config: dict[str, Any], target_path: str) -> str:
     if relative == os.pardir or relative.startswith(f"{os.pardir}{os.sep}"):
         raise ValueError(f"{target_path} is not under {restore_base}")
 
-    zfs_cfg = config["zfs"]
-    dataset = _qualify_zfs_dataset(
-        zfs_cfg["pool_name"],
-        zfs_cfg["receive_parent_dataset"],
-    )
+    dataset = zfs_receive_parent_dataset(config)
     if relative == ".":
         return dataset
 
@@ -131,6 +132,21 @@ def target_token(source_identifier: str) -> str:
     token = source_identifier.replace("\\", "/").strip("/")
     token = token.replace("/", "__")
     return token or "source"
+
+
+def zfs_receive_parent_dataset(config: dict[str, Any]) -> str:
+    if backend_name(config) != "zfs":
+        raise ValueError(
+            "receive parent datasets are only defined for ZFS configs"
+        )
+    zfs_cfg = config["zfs"]
+    receive_parent_dataset = zfs_cfg.get("receive_parent_dataset")
+    if not isinstance(receive_parent_dataset, str) or not receive_parent_dataset:
+        raise ValueError(_ZFS_RESTORE_PARENT_REQUIRED)
+    return _qualify_zfs_dataset(
+        zfs_cfg["pool_name"],
+        receive_parent_dataset,
+    )
 
 
 def _btrfs_source_specs(config: dict[str, Any]) -> list[SourceSpec]:

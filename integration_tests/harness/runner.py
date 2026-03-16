@@ -291,15 +291,19 @@ def _render_zfs_sections(
         ]
         lines.append(f"source_datasets = {_format_toml_list(source_datasets)}")
 
-    receive_parent_dataset = _qualify_zfs_dataset(
-        pool_name,
-        zfs_cfg["receive_parent_dataset"],
-    )
+    receive_parent_dataset = zfs_cfg.get("receive_parent_dataset")
+    if receive_parent_dataset is not None:
+        qualified_receive_parent = _qualify_zfs_dataset(
+            pool_name,
+            receive_parent_dataset,
+        )
+        lines.append(
+            f'receive_parent_dataset = "{qualified_receive_parent}"'
+        )
     lines.extend(
         [
-        f'receive_parent_dataset = "{receive_parent_dataset}"',
-        f'snapshot_prefix = "{zfs_cfg["snapshot_prefix"]}"',
-        "",
+            f'snapshot_prefix = "{zfs_cfg["snapshot_prefix"]}"',
+            "",
         ]
     )
     return lines
@@ -309,17 +313,20 @@ def _resolve_restore_base(
     config: dict[str, Any],
     backend: str,
     restore_base: str | None,
-) -> str:
+) -> str | None:
     if restore_base:
         return os.path.abspath(restore_base)
     if backend == "btrfs":
         return os.path.abspath(os.path.join(config["paths"]["mount_dir"], "restore"))
     if backend == "zfs":
         zfs_cfg = config["zfs"]
+        receive_parent_dataset = zfs_cfg.get("receive_parent_dataset")
+        if receive_parent_dataset is None:
+            return None
         mount_root = os.path.abspath(zfs_cfg["mount_root"])
         dataset_path = _zfs_dataset_mount_path(
             zfs_cfg["pool_name"],
-            zfs_cfg["receive_parent_dataset"],
+            receive_parent_dataset,
         )
         return os.path.join(mount_root, dataset_path)
     raise ValueError(f"unsupported backend {backend!r}")
