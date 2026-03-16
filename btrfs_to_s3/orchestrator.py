@@ -62,7 +62,7 @@ class BackupRequest:
 
 @dataclass(frozen=True)
 class RestoreRequest:
-    source_name: str
+    source_name: str | None
     target: Path
     manifest_key: str | None
     restore_timeout: int | None
@@ -649,11 +649,17 @@ class RestoreOrchestrator:
             else self.config.restore.restore_timeout_seconds
         )
         prefix = _build_prefix(self.config.s3.prefix)
-        current_key = (
-            f"{_source_object_prefix(prefix, request.source_name)}current.json"
-        )
         manifest_key = request.manifest_key
-        if not manifest_key:
+        if manifest_key is None:
+            if request.source_name is None:
+                self.logger.error(
+                    "event=restore_invalid_source status=failed "
+                    "error=restore requires --source unless --manifest-key is provided"
+                )
+                return 2
+            current_key = (
+                f"{_source_object_prefix(prefix, request.source_name)}current.json"
+            )
             manifest_key = self._fetch_manifest_key(
                 client,
                 current_key,
@@ -674,7 +680,7 @@ class RestoreOrchestrator:
         if manifests is None:
             return 1
         try:
-            validate_manifest_chain(
+            restore_source_name = validate_manifest_chain(
                 manifests,
                 expected_source_name=request.source_name,
                 expected_filesystem=backend.name,
@@ -702,7 +708,7 @@ class RestoreOrchestrator:
         metrics = calculate_metrics(total_bytes, elapsed)
         self.logger.info(
             "event=restore_metrics source=%s total_bytes=%d elapsed_seconds=%.3f throughput=%s",
-            request.source_name,
+            restore_source_name,
             metrics.total_bytes,
             metrics.elapsed_seconds,
             format_throughput(metrics.throughput_bytes_per_sec),
@@ -715,7 +721,7 @@ class RestoreOrchestrator:
         if (
             self._verify_restore(
                 verify_mode,
-                request.source_name,
+                restore_source_name,
                 manifests,
                 request.target,
                 backend.restore_operations,

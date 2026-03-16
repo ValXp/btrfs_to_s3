@@ -597,6 +597,50 @@ class CreateFilesystemBackendTests(unittest.TestCase):
         self.assertIsInstance(backend.send_operations, BtrfsSendOperations)
         self.assertIsInstance(backend.restore_operations, BtrfsRestoreOperations)
 
+    def test_create_btrfs_backend_allows_empty_source_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            snapshots_dir = Path(temp_dir) / "snapshots"
+            config = Config(
+                global_cfg=GlobalConfig(
+                    log_level="info",
+                    state_path=Path(temp_dir) / "state.json",
+                    lock_path=Path(temp_dir) / "lock",
+                    spool_dir=Path(temp_dir) / "spool",
+                    spool_size_bytes=1024,
+                ),
+                schedule=ScheduleConfig(
+                    full_every_days=180,
+                    incremental_every_days=7,
+                    run_at="02:00",
+                ),
+                snapshots=SnapshotsConfig(base_dir=snapshots_dir, retain=2),
+                subvolumes=SubvolumesConfig(paths=()),
+                s3=S3Config(
+                    bucket="bucket",
+                    region="us-east-1",
+                    prefix="backup/data",
+                    chunk_size_bytes=2048,
+                    storage_class_chunks="STANDARD",
+                    storage_class_manifest="STANDARD",
+                    concurrency=1,
+                    spool_enabled=False,
+                    sse="AES256",
+                ),
+                restore=RestoreConfig(
+                    target_base_dir=Path(temp_dir) / "restore",
+                    verify_mode="full",
+                    sample_max_files=100,
+                    wait_for_restore=True,
+                    restore_timeout_seconds=3600,
+                    restore_tier="Standard",
+                ),
+            )
+
+            backend = create_filesystem_backend(config, runner=RecordingRunner())
+
+        self.assertEqual(backend.sources, ())
+        self.assertIsInstance(backend.restore_operations, BtrfsRestoreOperations)
+
 
 if __name__ == "__main__":
     unittest.main()

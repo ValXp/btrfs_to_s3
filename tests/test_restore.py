@@ -164,6 +164,67 @@ class RestoreTests(unittest.TestCase):
 
         self.assertIn("requested source", str(context.exception))
 
+    def test_validate_manifest_chain_infers_source_when_not_requested(self) -> None:
+        manifests = [
+            restore.ManifestInfo(
+                key="full/manifest.json",
+                kind="full",
+                parent_manifest=None,
+                chunks=(),
+                s3={},
+                snapshot_path="/snapshots/data__20260101T000000Z__full",
+                source_name="data",
+            ),
+            restore.ManifestInfo(
+                key="inc/manifest.json",
+                kind="inc",
+                parent_manifest="full/manifest.json",
+                chunks=(),
+                s3={},
+                snapshot_path="/snapshots/data__20260108T000000Z__inc",
+                source_name="data",
+            ),
+        ]
+
+        source_name = restore.validate_manifest_chain(
+            manifests,
+            expected_source_name=None,
+            expected_filesystem="btrfs",
+        )
+
+        self.assertEqual(source_name, "data")
+
+    def test_validate_manifest_chain_rejects_inconsistent_sources(self) -> None:
+        manifests = [
+            restore.ManifestInfo(
+                key="full/manifest.json",
+                kind="full",
+                parent_manifest=None,
+                chunks=(),
+                s3={},
+                snapshot_path="/snapshots/data__20260101T000000Z__full",
+                source_name="data",
+            ),
+            restore.ManifestInfo(
+                key="inc/manifest.json",
+                kind="inc",
+                parent_manifest="full/manifest.json",
+                chunks=(),
+                s3={},
+                snapshot_path="/snapshots/other__20260108T000000Z__inc",
+                source_name="other",
+            ),
+        ]
+
+        with self.assertRaises(restore.RestoreError) as context:
+            restore.validate_manifest_chain(
+                manifests,
+                expected_source_name=None,
+                expected_filesystem="btrfs",
+            )
+
+        self.assertIn("requested source", str(context.exception))
+
     def test_validate_manifest_chain_rejects_filesystem_mismatch(self) -> None:
         manifests = [
             restore.ManifestInfo(

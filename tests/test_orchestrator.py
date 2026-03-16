@@ -1558,6 +1558,166 @@ class OrchestratorRestoreTests(unittest.TestCase):
                 backend.restore_operations,
             )
 
+    def test_restore_uses_manifest_source_when_request_omits_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir, subvolumes=())
+            backend = _make_backend(
+                temp_dir,
+                paths=(),
+                identifiers=(),
+            )
+            request = RestoreRequest(
+                source_name=None,
+                target=Path(temp_dir) / "restore",
+                manifest_key="manifest.json",
+                restore_timeout=None,
+                wait_restore=None,
+                verify="none",
+            )
+            manifests = [
+                ManifestInfo(
+                    key="manifest.json",
+                    kind="full",
+                    parent_manifest=None,
+                    chunks=(),
+                    s3={},
+                    snapshot_path=None,
+                    source_name="data",
+                )
+            ]
+            orchestrator = RestoreOrchestrator(
+                config,
+                backend_factory=lambda config, runner: backend,
+            )
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_init_s3_client",
+                return_value=object(),
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_fetch_manifest_key",
+                side_effect=AssertionError(
+                    "_fetch_manifest_key should not be called"
+                ),
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_resolve_chain",
+                return_value=manifests,
+            ), mock.patch(
+                "btrfs_to_s3.orchestrator.restore_chain",
+                return_value=0,
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_verify_restore",
+                return_value=0,
+            ) as verify_restore:
+                self.assertEqual(orchestrator.run(request), 0)
+
+            self.assertEqual(verify_restore.call_args.args[1], "data")
+
+    def test_restore_current_lookup_does_not_require_configured_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir, subvolumes=())
+            backend = _make_backend(
+                temp_dir,
+                paths=(),
+                identifiers=(),
+            )
+            request = RestoreRequest(
+                source_name="data",
+                target=Path(temp_dir) / "restore",
+                manifest_key=None,
+                restore_timeout=None,
+                wait_restore=None,
+                verify="none",
+            )
+            orchestrator = RestoreOrchestrator(
+                config,
+                backend_factory=lambda config, runner: backend,
+            )
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_init_s3_client",
+                return_value=object(),
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_fetch_manifest_key",
+                return_value="manifest.json",
+            ) as fetch_manifest_key, mock.patch.object(
+                RestoreOrchestrator,
+                "_resolve_chain",
+                return_value=[
+                    ManifestInfo(
+                        key="manifest.json",
+                        kind="full",
+                        parent_manifest=None,
+                        chunks=(),
+                        s3={},
+                        snapshot_path=None,
+                        source_name="data",
+                    )
+                ],
+            ), mock.patch(
+                "btrfs_to_s3.orchestrator.restore_chain",
+                return_value=0,
+            ):
+                self.assertEqual(orchestrator.run(request), 0)
+
+            fetch_manifest_key.assert_called_once()
+
+    def test_restore_requires_source_when_manifest_key_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _make_config(temp_dir, subvolumes=())
+            backend = _make_backend(
+                temp_dir,
+                paths=(),
+                identifiers=(),
+            )
+            request = RestoreRequest(
+                source_name=None,
+                target=Path(temp_dir) / "restore",
+                manifest_key=None,
+                restore_timeout=None,
+                wait_restore=None,
+                verify="none",
+            )
+            orchestrator = RestoreOrchestrator(
+                config,
+                logger=logging.getLogger("btrfs_to_s3.orchestrator_test"),
+                backend_factory=lambda config, runner: backend,
+            )
+
+            with mock.patch(
+                "btrfs_to_s3.orchestrator._has_aws_credentials",
+                return_value=True,
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_init_s3_client",
+                return_value=object(),
+            ), mock.patch.object(
+                RestoreOrchestrator,
+                "_fetch_manifest_key",
+            ) as fetch_manifest_key, self.assertLogs(
+                "btrfs_to_s3.orchestrator_test", level="ERROR"
+            ) as logs:
+                self.assertEqual(orchestrator.run(request), 2)
+
+            fetch_manifest_key.assert_not_called()
+            self.assertTrue(
+                any(
+                    "event=restore_invalid_source" in entry
+                    for entry in logs.output
+                )
+            )
+
     def test_restore_requires_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = _make_config(temp_dir)

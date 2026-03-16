@@ -368,6 +368,58 @@ class RunRestoreScriptTests(unittest.TestCase):
             manifest_key,
         )
 
+    def test_main_uses_restore_only_config_for_manifest_key_without_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            config_path = str(Path(tmpdir) / "test_zfs.toml")
+            manifest_key = "prefix/subvol/tank/data/incremental/manifest-2.json"
+            log = RecordingLog()
+
+            with mock.patch.object(
+                run_restore, "load_config", return_value=config
+            ), mock.patch.object(
+                run_restore, "open_log", return_value=log
+            ), mock.patch.object(
+                run_restore,
+                "create_s3_client",
+                return_value=object(),
+            ), mock.patch.object(
+                run_restore,
+                "read_object",
+                return_value=json.dumps({"subvolume": "tank/data"}).encode("utf-8"),
+            ), mock.patch.object(
+                run_restore,
+                "run_tool",
+                return_value=subprocess.CompletedProcess(["cmd"], 0, "restore ok", ""),
+            ) as run_tool_mock, mock.patch.object(
+                run_restore.sys,
+                "argv",
+                [
+                    "run_restore.py",
+                    "--config",
+                    config_path,
+                    "--manifest-key",
+                    manifest_key,
+                ],
+            ):
+                result = run_restore.main()
+
+            metadata_path = Path(config["paths"]["run_dir"]) / "restore_target.json"
+            with metadata_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+
+        self.assertEqual(result, 0)
+        called_args = run_tool_mock.call_args.args[1]
+        self.assertEqual(called_args[0], "restore")
+        self.assertNotIn("--source", called_args)
+        self.assertIn("--manifest-key", called_args)
+        self.assertEqual(
+            called_args[called_args.index("--manifest-key") + 1],
+            manifest_key,
+        )
+        self.assertTrue(run_tool_mock.call_args.kwargs["restore_only"])
+        self.assertEqual(payload["source"], "tank/data")
+
 
 class VerifyRestoreScriptTests(unittest.TestCase):
     def test_resolve_zfs_source_snapshot_uses_dot_zfs_snapshot_mount(self) -> None:

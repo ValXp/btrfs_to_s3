@@ -361,11 +361,11 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(config_module.ConfigError):
             config_module.Config.from_dict(data)
 
-    def test_rejects_missing_subvolumes(self) -> None:
+    def test_allows_missing_subvolumes_for_restore_only_config(self) -> None:
         data = self._valid_data()
         data["subvolumes"]["paths"] = []
-        with self.assertRaises(config_module.ConfigError):
-            config_module.Config.from_dict(data)
+        config = config_module.Config.from_dict(data)
+        self.assertEqual(config.subvolumes.paths, ())
 
     def test_rejects_invalid_backend_name(self) -> None:
         data = self._valid_data()
@@ -385,14 +385,12 @@ class ConfigTests(unittest.TestCase):
         ):
             config_module.Config.from_dict(data)
 
-    def test_rejects_zfs_without_source_datasets(self) -> None:
+    def test_allows_zfs_without_source_datasets(self) -> None:
         data = self._valid_zfs_data()
-        data["zfs"]["source_datasets"] = []
-        with self.assertRaisesRegex(
-            config_module.ConfigError,
-            r"zfs\.source_datasets",
-        ):
-            config_module.Config.from_dict(data)
+        del data["zfs"]["source_datasets"]
+        config = config_module.Config.from_dict(data)
+        assert config.zfs is not None
+        self.assertEqual(config.zfs.source_datasets, ())
 
     def test_rejects_relative_zfs_mount_root(self) -> None:
         data = self._valid_zfs_data()

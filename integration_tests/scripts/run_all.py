@@ -123,6 +123,11 @@ def _build_steps(
                     ("verify_manifest", "verify_manifest.py", []),
                     ("verify_s3", "verify_s3.py", []),
                     ("verify_retention", "verify_retention.py", []),
+                    (
+                        "restore_reconstructed",
+                        "run_restore.py",
+                        ["--use-incremental-manifest"],
+                    ),
                     ("restore", "run_restore.py", []),
                     ("restore_chain", "run_restore.py", ["--use-incremental-manifest"]),
                     ("verify_restore", "verify_restore.py", []),
@@ -143,6 +148,11 @@ def _build_steps(
                     ("verify_manifest", "verify_manifest.py", []),
                     ("verify_s3", "verify_s3.py", []),
                     ("verify_retention", "verify_retention.py", []),
+                    (
+                        "restore_reconstructed",
+                        "run_restore.py",
+                        ["--use-incremental-manifest"],
+                    ),
                     ("restore", "run_restore.py", ["--source", "all"]),
                     ("verify_restore", "verify_restore.py", ["--source", "all"]),
                 ]

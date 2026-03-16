@@ -28,11 +28,17 @@ def build_command(
     config: dict[str, Any],
     config_path: str,
     extra_args: Sequence[str] | None = None,
+    *,
+    restore_only: bool = False,
 ) -> list[str]:
     """Build the full CLI command, including config path and extra args."""
     config_path = os.path.abspath(config_path)
     tool = config["tool"]
-    tool_config_path = _ensure_tool_config(config, config_path)
+    tool_config_path = _ensure_tool_config(
+        config,
+        config_path,
+        restore_only=restore_only,
+    )
     cmd = resolve_command(config)
     if extra_args:
         cmd.extend(extra_args)
@@ -73,6 +79,7 @@ def run_tool(
     *,
     dry_run: bool = False,
     set_pythonpath: bool = True,
+    restore_only: bool = False,
 ) -> subprocess.CompletedProcess[str] | None:
     """Load config and run the configured CLI."""
     config_path = os.path.abspath(config_path)
@@ -80,24 +87,43 @@ def run_tool(
     env_path = os.path.join(os.path.dirname(config_path), "test.env")
     if os.path.exists(env_path):
         load_env(env_path, override=False)
-    command = build_command(config, config_path, extra_args)
+    command = build_command(
+        config,
+        config_path,
+        extra_args,
+        restore_only=restore_only,
+    )
     env = build_env(set_pythonpath=set_pythonpath)
     env["BTRFS_TO_S3_HARNESS_RUN_DIR"] = os.path.abspath(config["paths"]["run_dir"])
     return run_command(command, dry_run=dry_run, env=env)
 
 
-def _ensure_tool_config(config: dict[str, Any], config_path: str) -> str:
+def _ensure_tool_config(
+    config: dict[str, Any],
+    config_path: str,
+    *,
+    restore_only: bool = False,
+) -> str:
     paths = config["paths"]
     run_dir = os.path.abspath(paths["run_dir"])
     os.makedirs(run_dir, exist_ok=True)
-    tool_config_path = os.path.join(run_dir, "tool_config.toml")
-    content = _render_tool_config(config)
+    config_name = (
+        "tool_config_restore_only.toml"
+        if restore_only
+        else "tool_config.toml"
+    )
+    tool_config_path = os.path.join(run_dir, config_name)
+    content = _render_tool_config(config, restore_only=restore_only)
     with open(tool_config_path, "w", encoding="utf-8") as handle:
         handle.write(content)
     return tool_config_path
 
 
-def _render_tool_config(config: dict[str, Any]) -> str:
+def _render_tool_config(
+    config: dict[str, Any],
+    *,
+    restore_only: bool = False,
+) -> str:
     backend = config["filesystem"]["backend"]
     paths = config["paths"]
     aws_cfg = config["aws"]
@@ -143,9 +169,21 @@ def _render_tool_config(config: dict[str, Any]) -> str:
         "",
     ]
     if backend == "btrfs":
-        lines.extend(_render_btrfs_sections(config, retention))
+        lines.extend(
+            _render_btrfs_sections(
+                config,
+                retention,
+                restore_only=restore_only,
+            )
+        )
     elif backend == "zfs":
-        lines.extend(_render_zfs_sections(config, retention))
+        lines.extend(
+            _render_zfs_sections(
+                config,
+                retention,
+                restore_only=restore_only,
+            )
+        )
     else:
         raise ValueError(f"unsupported backend {backend!r}")
     lines.extend(
@@ -197,48 +235,74 @@ def _render_tool_config(config: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _render_btrfs_sections(config: dict[str, Any], retention: int) -> list[str]:
+def _render_btrfs_sections(
+    config: dict[str, Any],
+    retention: int,
+    *,
+    restore_only: bool = False,
+) -> list[str]:
     paths = config["paths"]
     btrfs_cfg = config["btrfs"]
     snapshots_dir = os.path.abspath(paths["snapshots_dir"])
-    mount_dir = os.path.abspath(paths["mount_dir"])
-    subvolume_paths = [
-        os.path.join(mount_dir, name) for name in btrfs_cfg["subvolumes"]
-    ]
-    return [
+    lines = [
         "[snapshots]",
         f'base_dir = "{snapshots_dir}"',
         f"retain = {retention}",
         "",
-        "[subvolumes]",
-        f"paths = {_format_toml_list(subvolume_paths)}",
-        "",
     ]
+    if restore_only:
+        return lines
+
+    mount_dir = os.path.abspath(paths["mount_dir"])
+    subvolume_paths = [
+        os.path.join(mount_dir, name) for name in btrfs_cfg["subvolumes"]
+    ]
+    lines.extend(
+        [
+            "[subvolumes]",
+            f"paths = {_format_toml_list(subvolume_paths)}",
+            "",
+        ]
+    )
+    return lines
 
 
-def _render_zfs_sections(config: dict[str, Any], retention: int) -> list[str]:
+def _render_zfs_sections(
+    config: dict[str, Any],
+    retention: int,
+    *,
+    restore_only: bool = False,
+) -> list[str]:
     zfs_cfg = config["zfs"]
     pool_name = zfs_cfg["pool_name"]
-    source_datasets = [
-        _qualify_zfs_dataset(pool_name, name) for name in zfs_cfg["source_datasets"]
-    ]
-    receive_parent_dataset = _qualify_zfs_dataset(
-        pool_name,
-        zfs_cfg["receive_parent_dataset"],
-    )
     mount_root = os.path.abspath(zfs_cfg["mount_root"])
-    return [
+    lines = [
         "[snapshots]",
         f"retain = {retention}",
         "",
         "[zfs]",
         f'pool_name = "{pool_name}"',
         f'mount_root = "{mount_root}"',
-        f"source_datasets = {_format_toml_list(source_datasets)}",
+    ]
+    if not restore_only:
+        source_datasets = [
+            _qualify_zfs_dataset(pool_name, name)
+            for name in zfs_cfg["source_datasets"]
+        ]
+        lines.append(f"source_datasets = {_format_toml_list(source_datasets)}")
+
+    receive_parent_dataset = _qualify_zfs_dataset(
+        pool_name,
+        zfs_cfg["receive_parent_dataset"],
+    )
+    lines.extend(
+        [
         f'receive_parent_dataset = "{receive_parent_dataset}"',
         f'snapshot_prefix = "{zfs_cfg["snapshot_prefix"]}"',
         "",
-    ]
+        ]
+    )
+    return lines
 
 
 def _resolve_restore_base(

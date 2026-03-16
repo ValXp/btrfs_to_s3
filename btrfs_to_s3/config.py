@@ -282,10 +282,6 @@ def validate_config(config: Config) -> None:
             raise ConfigError(
                 'snapshots.base_dir is required when filesystem.backend = "btrfs"'
             )
-        if not config.subvolumes.paths:
-            raise ConfigError(
-                'subvolumes.paths must include at least one path when filesystem.backend = "btrfs"'
-            )
         for path in config.subvolumes.paths:
             _validate_path(path, "subvolumes.paths")
         _validate_unique_btrfs_source_identifiers(config.subvolumes.paths)
@@ -372,7 +368,9 @@ def _load_zfs_config(raw: Any, backend: str) -> ZFSConfig | None:
             'zfs section is required when filesystem.backend = "zfs"'
         )
     mount_root = raw.get("mount_root")
-    source_datasets = raw.get("source_datasets")
+    source_datasets = raw.get("source_datasets", [])
+    if source_datasets is None:
+        source_datasets = []
     if not isinstance(source_datasets, list):
         raise ConfigError("zfs.source_datasets must be a list of dataset names")
     normalized_sources = []
@@ -447,8 +445,6 @@ def _validate_zfs_config(config: ZFSConfig) -> None:
     _validate_path(config.mount_root, "zfs.mount_root")
     if not config.pool_name:
         raise ConfigError("zfs.pool_name is required")
-    if not config.source_datasets:
-        raise ConfigError("zfs.source_datasets must include at least one dataset")
     _validate_unique_zfs_source_identifiers(
         config.pool_name,
         config.source_datasets,

@@ -51,6 +51,16 @@ class HarnessRunnerTests(unittest.TestCase):
         )
         self.assertNotIn("[zfs]", rendered)
 
+    def test_render_btrfs_restore_only_tool_config_omits_subvolumes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _btrfs_config(tmpdir)
+
+            rendered = runner._render_tool_config(config, restore_only=True)
+
+        self.assertIn('[filesystem]\nbackend = "btrfs"', rendered)
+        self.assertIn("[snapshots]", rendered)
+        self.assertNotIn("[subvolumes]", rendered)
+
     def test_render_zfs_tool_config_uses_pool_qualified_datasets(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = _zfs_config(tmpdir)
@@ -72,6 +82,17 @@ class HarnessRunnerTests(unittest.TestCase):
         self.assertNotIn("[subvolumes]", rendered)
         self.assertNotIn('\nbase_dir = "', rendered)
 
+    def test_render_zfs_restore_only_tool_config_omits_source_datasets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+
+            rendered = runner._render_tool_config(config, restore_only=True)
+
+        self.assertIn('[filesystem]\nbackend = "zfs"', rendered)
+        self.assertIn("[zfs]", rendered)
+        self.assertIn('receive_parent_dataset = "tank/restore"', rendered)
+        self.assertNotIn("source_datasets =", rendered)
+
 
 class RunAllTests(unittest.TestCase):
     def test_build_steps_keeps_btrfs_flow_and_lifecycle(self) -> None:
@@ -82,6 +103,10 @@ class RunAllTests(unittest.TestCase):
 
         self.assertEqual(steps[0], ("setup", "setup_btrfs.py", []))
         self.assertIn(("full", "run_full.py", []), steps)
+        self.assertIn(
+            ("restore_reconstructed", "run_restore.py", ["--use-incremental-manifest"]),
+            steps,
+        )
         self.assertIn(("verify_restore", "verify_restore.py", []), steps)
         self.assertEqual(teardown, ("teardown", "teardown_btrfs.py", []))
 
@@ -103,6 +128,11 @@ class RunAllTests(unittest.TestCase):
                 ("verify_manifest", "verify_manifest.py", []),
                 ("verify_s3", "verify_s3.py", []),
                 ("verify_retention", "verify_retention.py", []),
+                (
+                    "restore_reconstructed",
+                    "run_restore.py",
+                    ["--use-incremental-manifest"],
+                ),
                 ("restore", "run_restore.py", ["--source", "all"]),
                 ("verify_restore", "verify_restore.py", ["--source", "all"]),
             ],
@@ -176,6 +206,12 @@ class RunAllTests(unittest.TestCase):
                 ("verify_manifest", "verify_manifest.py", [], False),
                 ("verify_s3", "verify_s3.py", [], False),
                 ("verify_retention", "verify_retention.py", [], False),
+                (
+                    "restore_reconstructed",
+                    "run_restore.py",
+                    ["--use-incremental-manifest"],
+                    False,
+                ),
                 ("restore", "run_restore.py", ["--source", "all"], False),
                 ("verify_restore", "verify_restore.py", ["--source", "all"], False),
                 ("teardown", "teardown_zfs.py", [], True),

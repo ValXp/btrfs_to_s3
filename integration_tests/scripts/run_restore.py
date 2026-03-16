@@ -65,7 +65,13 @@ def main() -> int:
     with open_log(log_path) as log:
         log.write(f"loading config from {config_path}")
         try:
-            sources = _resolve_sources(args.source, config)
+            sources = _resolve_sources(
+                args.source,
+                config,
+                allow_manifest_only=bool(
+                    args.manifest_key or args.use_incremental_manifest
+                ),
+            )
             if len(sources) > 1 and (args.manifest_key or args.use_incremental_manifest):
                 raise ValueError(
                     "--manifest-key and --use-incremental-manifest require a single source"
@@ -81,42 +87,58 @@ def main() -> int:
         restore_entries: list[dict[str, str]] = []
         for source in sources:
             try:
-                target_path = _resolve_target_path(args, config, source)
                 manifest_key = _resolve_manifest_key(args, config, source, log)
+                restore_only = manifest_key is not None and args.source is None
+                restore_source = _resolve_restore_source(
+                    config,
+                    source,
+                    manifest_key,
+                    log,
+                    infer_from_manifest=restore_only,
+                )
+                target_path = _resolve_target_path(args, config, restore_source)
             except ValueError as exc:
                 log.write(str(exc), level="ERROR")
                 return 1
 
-            log.write(f"restoring source {source} to {target_path}")
+            log.write(f"restoring source {restore_source} to {target_path}")
             if manifest_key:
                 log.write(f"using manifest key {manifest_key}")
+            if restore_only:
+                log.write("using restore-only tool config without configured sources")
             if args.dry_run:
                 log.write("dry run: printing command only")
 
-            extra_args = ["restore", "--source", source, "--target", target_path]
+            extra_args = ["restore"]
+            if not restore_only:
+                extra_args.extend(["--source", restore_source])
+            extra_args.extend(["--target", target_path])
             if manifest_key:
                 extra_args.extend(["--manifest-key", manifest_key])
             if args.restore_timeout is not None:
                 extra_args.extend(["--restore-timeout", str(args.restore_timeout)])
 
             try:
+                run_tool_kwargs = {"dry_run": args.dry_run}
+                if restore_only:
+                    run_tool_kwargs["restore_only"] = True
                 result = run_tool(
                     config_path,
                     extra_args,
-                    dry_run=args.dry_run,
+                    **run_tool_kwargs,
                 )
                 if result:
-                    _log_process(log, f"restore[{source}]", result)
+                    _log_process(log, f"restore[{restore_source}]", result)
                 if not args.dry_run:
                     restore_entries.append(
                         {
-                            "source": source,
-                            "subvolume": source,
+                            "source": restore_source,
+                            "subvolume": restore_source,
                             "target_path": target_path,
                         }
                     )
             except subprocess.CalledProcessError as exc:
-                _log_process_error(log, f"restore[{source}]", exc)
+                _log_process_error(log, f"restore[{restore_source}]", exc)
                 return 1
             except Exception as exc:
                 log.write(f"restore failed: {exc}", level="ERROR")
@@ -128,10 +150,17 @@ def main() -> int:
     return 0
 
 
-def _resolve_sources(requested: str | None, config: dict) -> list[str]:
+def _resolve_sources(
+    requested: str | None,
+    config: dict,
+    *,
+    allow_manifest_only: bool = False,
+) -> list[str | None]:
     sources = source_identifiers(config)
     if requested is None:
         if not sources:
+            if allow_manifest_only:
+                return [None]
             raise ValueError("config has no sources")
         return [sources[0]]
     if requested == "all":
@@ -146,7 +175,7 @@ def _resolve_sources(requested: str | None, config: dict) -> list[str]:
 def _resolve_manifest_key(
     args,
     config: dict,
-    source: str,
+    source: str | None,
     log,
 ) -> str | None:
     if args.manifest_key and args.use_incremental_manifest:
@@ -155,6 +184,8 @@ def _resolve_manifest_key(
         return args.manifest_key
     if not args.use_incremental_manifest:
         return None
+    if source is None:
+        raise ValueError("--use-incremental-manifest requires a source")
 
     aws_cfg = config["aws"]
     client = create_s3_client(aws_cfg["region"])
@@ -184,6 +215,51 @@ def _resolve_manifest_key(
     if not isinstance(parent_manifest, str) or not parent_manifest:
         raise ValueError(f"{manifest_key} missing parent_manifest for chain restore")
     return manifest_key
+
+
+def _resolve_restore_source(
+    config: dict,
+    source: str | None,
+    manifest_key: str | None,
+    log,
+    *,
+    infer_from_manifest: bool = False,
+) -> str:
+    if not infer_from_manifest:
+        if source is None:
+            raise ValueError("restore source could not be resolved")
+        return source
+    if manifest_key is None:
+        raise ValueError("restore source could not be resolved")
+    return _resolve_manifest_source(
+        config,
+        manifest_key,
+        expected_source=source,
+        log=log,
+    )
+
+
+def _resolve_manifest_source(
+    config: dict,
+    manifest_key: str,
+    *,
+    expected_source: str | None,
+    log,
+) -> str:
+    aws_cfg = config["aws"]
+    client = create_s3_client(aws_cfg["region"])
+    payload = read_object(client, aws_cfg["bucket"], manifest_key)
+    manifest = manifest_lib.load_json_bytes(payload, manifest_key)
+    source = manifest.get("subvolume")
+    if not isinstance(source, str) or not source:
+        raise ValueError(f"{manifest_key} missing subvolume")
+    if expected_source is not None and source != expected_source:
+        raise ValueError(
+            f"{manifest_key} source {source!r} does not match requested source "
+            f"{expected_source!r}"
+        )
+    log.write(f"resolved manifest source {source}")
+    return source
 
 
 def _resolve_target_path(args, config: dict, source: str) -> str:

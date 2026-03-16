@@ -50,7 +50,6 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--source",
         "--subvolume",
         dest="source",
-        required=True,
         help="source identifier; --subvolume is a compatibility alias",
     )
     restore.add_argument("--target", required=True, help="restore target path")
@@ -89,6 +88,14 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(list(argv))
     if args.command is None:
         parser.error("command required")
+    if (
+        args.command == "restore"
+        and args.source is None
+        and args.manifest_key is None
+    ):
+        parser.error(
+            "restore requires --source unless --manifest-key is provided"
+        )
     return args
 
 

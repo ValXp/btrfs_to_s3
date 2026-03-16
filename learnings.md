@@ -64,3 +64,4 @@ Learnings
 - FYI: planner/orchestrator internals now use backend-neutral `source`/`sources` naming, but serialized state, manifest JSON, and S3 keys intentionally keep `subvolumes`, `subvolume`, and `subvol/` as compatibility boundaries for existing backups.
 - FYI: `.gitignore` ignores `stop.md`, so the loop-ending marker must be staged with `git add -f stop.md` if it needs to be committed.
 - FYI: `BackupOrchestrator._make_uploader()` must not derive multipart `part_size` from `s3.chunk_size_bytes`; otherwise the default 200 GiB chunk size collapses to 5 GiB S3 parts and the non-spooled upload path can retain `concurrency * 5 GiB` in RAM.
+- FYI: a live ZFS harness rerun can fail in `setup_zfs.py` with `cannot mount .../mnt: directory is not empty` if a prior restore left `integration_tests/run/zfs/mnt/restore` behind after pool teardown; clearing that stale directory before rerun unblocks the full flow.

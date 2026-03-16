@@ -154,15 +154,23 @@ def fetch_manifest(
 def validate_manifest_chain(
     manifests: Iterable[ManifestInfo],
     *,
-    expected_source_name: str,
+    expected_source_name: str | None,
     expected_filesystem: str,
-) -> None:
+) -> str:
+    resolved_source_name: str | None = expected_source_name
+    saw_manifest = False
     for manifest in manifests:
+        saw_manifest = True
+        if resolved_source_name is None:
+            resolved_source_name = manifest.source_name
         _validate_manifest_selection(
             manifest,
-            expected_source_name=expected_source_name,
+            expected_source_name=resolved_source_name,
             expected_filesystem=expected_filesystem,
         )
+    if not saw_manifest or resolved_source_name is None:
+        raise RestoreError("manifest chain is empty")
+    return resolved_source_name
 
 
 def parse_manifest(payload: dict[str, Any], key: str) -> ManifestInfo:

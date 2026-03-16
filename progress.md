@@ -83,3 +83,4 @@
 - 2026-03-14 09:07 MDT: Completed Task 40 ZFS restore content verification source resolution; commit "Resolve ZFS restore verification sources".
 - 2026-03-14 09:19 MDT: Completed Task 41 fence or eliminate remaining `subvolume`-only internals; commit "Fence legacy subvolume compatibility boundaries".
 - 2026-03-14 20:33 MDT: Completed Finding 2 multipart default part-size validation/fix; commit "Restore 128 MiB multipart default".
+- 2026-03-15 19:48 MDT: Completed restore-only reconstructed-config support plus harness coverage and live validation; commit "Support restore-only manifest recovery".

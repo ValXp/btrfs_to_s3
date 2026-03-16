@@ -217,6 +217,40 @@ class CliTests(unittest.TestCase):
         self.assertFalse(args.wait_restore)
         self.assertEqual(args.verify, "sample")
 
+    def test_parse_restore_args_allows_manifest_key_without_source(self) -> None:
+        args = cli.parse_args(
+            [
+                "restore",
+                "--config",
+                "/tmp/config.toml",
+                "--target",
+                "/srv/restore/data",
+                "--manifest-key",
+                "subvol/data/full/manifest.json",
+            ]
+        )
+        self.assertIsNone(args.source)
+        self.assertEqual(args.manifest_key, "subvol/data/full/manifest.json")
+
+    def test_parse_restore_args_requires_source_without_manifest_key(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as context:
+                cli.parse_args(
+                    [
+                        "restore",
+                        "--config",
+                        "/tmp/config.toml",
+                        "--target",
+                        "/srv/restore/data",
+                    ]
+                )
+        self.assertEqual(context.exception.code, 2)
+        self.assertIn(
+            "restore requires --source unless --manifest-key is provided",
+            stderr.getvalue(),
+        )
+
     def test_run_backup_maps_source_aliases_to_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._make_config(temp_dir)
@@ -256,6 +290,27 @@ class CliTests(unittest.TestCase):
                 cli.run_restore(args, config)
             request = run.call_args.args[0]
             self.assertEqual(request.source_name, "data")
+
+    def test_run_restore_allows_missing_source_when_manifest_key_is_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self._make_config(temp_dir)
+            args = cli.parse_args(
+                [
+                    "restore",
+                    "--config",
+                    "/tmp/config.toml",
+                    "--target",
+                    "/srv/restore/data",
+                    "--manifest-key",
+                    "subvol/data/full/manifest.json",
+                ]
+            )
+            with mock.patch.object(
+                RestoreOrchestrator, "run", return_value=0
+            ) as run:
+                cli.run_restore(args, config)
+            request = run.call_args.args[0]
+            self.assertIsNone(request.source_name)
 
     def test_backup_skips_when_not_due(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

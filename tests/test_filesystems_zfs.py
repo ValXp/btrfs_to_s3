@@ -781,6 +781,57 @@ class CreateFilesystemBackendTests(unittest.TestCase):
         self.assertIn("duplicate source identifiers", str(context.exception))
         self.assertIn("tank/data", str(context.exception))
 
+    def test_create_zfs_backend_allows_empty_source_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = Config(
+                global_cfg=GlobalConfig(
+                    log_level="info",
+                    state_path=Path(temp_dir) / "state.json",
+                    lock_path=Path(temp_dir) / "lock",
+                    spool_dir=Path(temp_dir) / "spool",
+                    spool_size_bytes=1024,
+                ),
+                schedule=ScheduleConfig(
+                    full_every_days=180,
+                    incremental_every_days=7,
+                    run_at="02:00",
+                ),
+                snapshots=SnapshotsConfig(base_dir=None, retain=2),
+                subvolumes=SubvolumesConfig(paths=()),
+                s3=S3Config(
+                    bucket="bucket",
+                    region="us-east-1",
+                    prefix="backup/data",
+                    chunk_size_bytes=2048,
+                    storage_class_chunks="STANDARD",
+                    storage_class_manifest="STANDARD",
+                    concurrency=1,
+                    spool_enabled=False,
+                    sse="AES256",
+                ),
+                restore=RestoreConfig(
+                    target_base_dir=Path(temp_dir) / "restore",
+                    verify_mode="full",
+                    sample_max_files=100,
+                    wait_for_restore=True,
+                    restore_timeout_seconds=3600,
+                    restore_tier="Standard",
+                ),
+                filesystem=FilesystemConfig(backend="zfs"),
+                zfs=ZFSConfig(
+                    pool_name="tank",
+                    mount_root=Path("/tank"),
+                    source_datasets=(),
+                    receive_parent_dataset="restore",
+                    snapshot_prefix="btrfs-to-s3",
+                ),
+            )
+
+            backend = create_filesystem_backend(config, runner=RecordingRunner())
+
+        self.assertEqual(backend.sources, ())
+        self.assertIsInstance(backend.restore_operations, ZFSRestoreOperations)
+
 
 if __name__ == "__main__":
     unittest.main()
