@@ -6,11 +6,14 @@ backends.
 
 ## Usage
 
-`btrfs_to_s3` reads a TOML config file and supports two commands:
+`btrfs_to_s3` reads a TOML config file and supports backup, restore, and
+S3-backed discovery commands:
 
 ```sh
 python3 -m btrfs_to_s3 backup --config /etc/btrfs_to_s3/config.toml
 python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --source data --target /srv/restore/data
+python3 -m btrfs_to_s3 list-sources --config /etc/btrfs_to_s3/config.toml
+python3 -m btrfs_to_s3 list-manifests --config /etc/btrfs_to_s3/config.toml --source data
 ```
 
 `--source` is the backend-neutral flag. `--subvolume` is still accepted as a
@@ -65,6 +68,16 @@ python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --source ta
 # Restore from a specific manifest key and skip verification.
 python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --source data --target /srv/restore/data \
   --manifest-key subvol/data/full/manifest-20260101T000000Z.json --verify none
+```
+
+Discovery commands inspect S3 directly and print JSON to stdout:
+
+```sh
+# List restorable sources discovered from current.json pointers under s3.prefix.
+python3 -m btrfs_to_s3 list-sources --config /etc/btrfs_to_s3/config.toml
+
+# List available manifests for a chosen source, newest first.
+python3 -m btrfs_to_s3 list-manifests --config /etc/btrfs_to_s3/config.toml --source tank/data
 ```
 
 When restore verification is enabled, the application always validates the

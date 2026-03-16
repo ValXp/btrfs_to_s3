@@ -216,6 +216,8 @@ planner compatibility and legacy state upgrades.
 ## CLI
 - `btrfs_to_s3 backup --config /path/to/config.toml`
 - `btrfs_to_s3 restore --config /path/to/config.toml --source data --target /restore/data`
+- `btrfs_to_s3 list-sources --config /path/to/config.toml`
+- `btrfs_to_s3 list-manifests --config /path/to/config.toml --source data`
 - Flags: `--log-level`, `--dry-run`, `--source` (optional filter for backup),
   `--subvolume` (compatibility alias),
   `--once` (ignore schedule), `--no-s3` (local only for diagnostics).
@@ -226,6 +228,12 @@ planner compatibility and legacy state upgrades.
   - `--wait-restore` (default on): request/await S3 restore for archival storage.
   - `--restore-timeout` (e.g., `6h`): max time to wait for S3 restore readiness.
   - `--verify` (default on): run metadata + content verification.
+- Discovery output:
+  - `list-sources` prints JSON describing each discovered source's
+    `current.json` pointer (`source_name`, `manifest_key`, `kind`,
+    `created_at`).
+  - `list-manifests` prints JSON describing the available manifests for the
+    requested source (`key`, `kind`, `created_at`, `is_current`).
 
 ## Config shapes
 

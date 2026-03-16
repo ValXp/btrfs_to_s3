@@ -10,9 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 import hashlib
+import json
 import logging
 
 from btrfs_to_s3 import cli
+from btrfs_to_s3.discovery import ManifestListing, RestorableSource
 from btrfs_to_s3.filesystems import BackupSource, FilesystemBackend
 from btrfs_to_s3.orchestrator import (
     BackupOrchestrator,
@@ -249,6 +251,119 @@ class CliTests(unittest.TestCase):
         self.assertIn(
             "restore requires --source unless --manifest-key is provided",
             stderr.getvalue(),
+        )
+
+    def test_parse_list_sources_args(self) -> None:
+        args = cli.parse_args(
+            [
+                "list-sources",
+                "--config",
+                "/tmp/config.toml",
+                "--log-level",
+                "debug",
+            ]
+        )
+        self.assertEqual(args.command, "list-sources")
+        self.assertEqual(args.config, "/tmp/config.toml")
+        self.assertEqual(args.log_level, "debug")
+
+    def test_parse_list_manifests_args_accepts_subvolume_alias(self) -> None:
+        args = cli.parse_args(
+            [
+                "list-manifests",
+                "--config",
+                "/tmp/config.toml",
+                "--subvolume",
+                "tank/data",
+            ]
+        )
+        self.assertEqual(args.command, "list-manifests")
+        self.assertEqual(args.source, "tank/data")
+
+    def test_main_runs_list_sources_with_config(self) -> None:
+        with tempfile.NamedTemporaryFile("w", delete=False) as handle:
+            handle.write(CONFIG_TOML)
+            path = Path(handle.name)
+        buffer = io.StringIO()
+        with mock.patch.object(
+            cli, "has_aws_credentials", return_value=True
+        ), mock.patch.object(
+            cli, "get_s3_client", return_value=object()
+        ), mock.patch.object(
+            cli,
+            "list_restorable_sources",
+            return_value=[
+                RestorableSource(
+                    source_name="data",
+                    current_key="backup/data/subvol/data/current.json",
+                    manifest_key=(
+                        "backup/data/subvol/data/full/manifest-20260314T000000Z.json"
+                    ),
+                    kind="full",
+                    created_at="20260314T000000Z",
+                )
+            ],
+        ), redirect_stdout(buffer):
+            exit_code = cli.main(["list-sources", "--config", str(path)])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            json.loads(buffer.getvalue()),
+            [
+                {
+                    "source_name": "data",
+                    "current_key": "backup/data/subvol/data/current.json",
+                    "manifest_key": (
+                        "backup/data/subvol/data/full/manifest-20260314T000000Z.json"
+                    ),
+                    "kind": "full",
+                    "created_at": "20260314T000000Z",
+                }
+            ],
+        )
+
+    def test_run_list_manifests_writes_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self._make_config(temp_dir)
+            args = cli.parse_args(
+                [
+                    "list-manifests",
+                    "--config",
+                    "/tmp/config.toml",
+                    "--source",
+                    "data",
+                ]
+            )
+            buffer = io.StringIO()
+            with mock.patch.object(
+                cli, "has_aws_credentials", return_value=True
+            ), mock.patch.object(
+                cli, "get_s3_client", return_value=object()
+            ), mock.patch.object(
+                cli,
+                "list_available_manifests",
+                return_value=[
+                    ManifestListing(
+                        source_name="data",
+                        key="backup/data/subvol/data/full/manifest-20260314T000000Z.json",
+                        kind="full",
+                        created_at="20260314T000000Z",
+                        is_current=True,
+                    )
+                ],
+            ), redirect_stdout(buffer):
+                exit_code = cli.run_list_manifests(args, config)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            json.loads(buffer.getvalue()),
+            [
+                {
+                    "source_name": "data",
+                    "key": "backup/data/subvol/data/full/manifest-20260314T000000Z.json",
+                    "kind": "full",
+                    "created_at": "20260314T000000Z",
+                    "is_current": True,
+                }
+            ],
         )
 
     def test_run_backup_maps_source_aliases_to_request(self) -> None:

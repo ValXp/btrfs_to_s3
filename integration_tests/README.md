@@ -65,7 +65,8 @@ How the ZFS harness differs
   `[filesystem].backend`. For ZFS configs it now runs the application-backed
   sequence: `seed_data.py`, `run_full.py`, `mutate_data.py`,
   `run_incremental.py --skip-mutate`, `run_interrupt.py`,
-  `verify_manifest.py`, `verify_s3.py`, `verify_retention.py`,
+  `verify_manifest.py`, `verify_discovery.py`, `verify_s3.py`,
+  `verify_retention.py`,
   `run_restore.py --source all`, and `verify_restore.py --source all`.
 - When `setup_zfs.py` creates a fresh disposable pool, it clears stale local
   harness metadata in `paths.run_dir` such as `state.json`, `manifest.json`,
@@ -103,8 +104,9 @@ Quickstart
 5. Run the ZFS application-backed harness:
    - `sudo -E python3 integration_tests/scripts/run_all.py --config integration_tests/config/test_zfs.toml`
    - This runs setup, seed, full backup, mutate, incremental backup,
-     interrupt/retry, manifest verification, S3 verification, retention
-     verification, restore, verify_restore, and teardown.
+     interrupt/retry, manifest verification, discovery verification, S3
+     verification, retention verification, restore, verify_restore, and
+     teardown.
    - `--skip-s3` reduces the ZFS run to setup, seed, mutate, and teardown when
      you only want to validate the disposable fixture without AWS.
 6. Run individual ZFS application-backed steps manually (use `sudo -E` for the
@@ -116,6 +118,7 @@ Quickstart
    - `sudo -E python3 integration_tests/scripts/run_incremental.py --config integration_tests/config/test_zfs.toml`
    - `sudo -E python3 integration_tests/scripts/run_interrupt.py --config integration_tests/config/test_zfs.toml --source tank/data`
    - `sudo -E python3 integration_tests/scripts/verify_manifest.py --config integration_tests/config/test_zfs.toml`
+   - `sudo -E python3 integration_tests/scripts/verify_discovery.py --config integration_tests/config/test_zfs.toml`
    - `sudo -E python3 integration_tests/scripts/verify_s3.py --config integration_tests/config/test_zfs.toml`
    - `sudo -E python3 integration_tests/scripts/verify_retention.py --config integration_tests/config/test_zfs.toml`
    - `sudo -E python3 integration_tests/scripts/run_restore.py --config integration_tests/config/test_zfs.toml --source tank/data`

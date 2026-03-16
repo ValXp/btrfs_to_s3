@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,9 @@ cleanup_s3_prefix = importlib.import_module(
     "integration_tests.scripts.cleanup_s3_prefix"
 )
 verify_manifest = importlib.import_module("integration_tests.scripts.verify_manifest")
+verify_discovery = importlib.import_module(
+    "integration_tests.scripts.verify_discovery"
+)
 verify_retention = importlib.import_module("integration_tests.scripts.verify_retention")
 verify_s3 = importlib.import_module("integration_tests.scripts.verify_s3")
 
@@ -161,6 +165,190 @@ class VerifyManifestScriptTests(unittest.TestCase):
                 "prefix/subvol/tank/data/full/manifest-1.json",
                 "prefix/subvol/tank/home/current.json",
                 "prefix/subvol/tank/home/full/manifest-1.json",
+            ],
+        )
+
+
+class VerifyDiscoveryScriptTests(unittest.TestCase):
+    def test_main_validates_cli_discovery_output_against_s3_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = _zfs_config(tmpdir)
+            config_path = str(Path(tmpdir) / "test_zfs.toml")
+            log = RecordingLog()
+            current_payloads = {
+                "prefix/subvol/tank/data/current.json": json.dumps(
+                    {
+                        "manifest_key": (
+                            "prefix/subvol/tank/data/incremental/"
+                            "manifest-20260314T010000Z.json"
+                        ),
+                        "kind": "incremental",
+                        "created_at": "20260314T010000Z",
+                    }
+                ).encode("utf-8"),
+                "prefix/subvol/tank/home/current.json": json.dumps(
+                    {
+                        "manifest_key": (
+                            "prefix/subvol/tank/home/full/"
+                            "manifest-20260314T000500Z.json"
+                        ),
+                        "kind": "full",
+                        "created_at": "20260314T000500Z",
+                    }
+                ).encode("utf-8"),
+            }
+            objects_by_prefix = {
+                "prefix/subvol/": [
+                    {"Key": "prefix/subvol/tank/data/current.json"},
+                    {"Key": "prefix/subvol/tank/home/current.json"},
+                ],
+                "prefix/subvol/tank/data/": [
+                    {"Key": "prefix/subvol/tank/data/current.json"},
+                    {
+                        "Key": (
+                            "prefix/subvol/tank/data/full/"
+                            "manifest-20260314T000000Z.json"
+                        )
+                    },
+                    {
+                        "Key": (
+                            "prefix/subvol/tank/data/incremental/"
+                            "manifest-20260314T010000Z.json"
+                        )
+                    },
+                ],
+                "prefix/subvol/tank/home/": [
+                    {"Key": "prefix/subvol/tank/home/current.json"},
+                    {
+                        "Key": (
+                            "prefix/subvol/tank/home/full/"
+                            "manifest-20260314T000500Z.json"
+                        )
+                    },
+                ],
+            }
+            tool_results = [
+                subprocess.CompletedProcess(
+                    ["cmd"],
+                    0,
+                    json.dumps(
+                        [
+                            {
+                                "source_name": "tank/data",
+                                "current_key": "prefix/subvol/tank/data/current.json",
+                                "manifest_key": (
+                                    "prefix/subvol/tank/data/incremental/"
+                                    "manifest-20260314T010000Z.json"
+                                ),
+                                "kind": "incremental",
+                                "created_at": "20260314T010000Z",
+                            },
+                            {
+                                "source_name": "tank/home",
+                                "current_key": "prefix/subvol/tank/home/current.json",
+                                "manifest_key": (
+                                    "prefix/subvol/tank/home/full/"
+                                    "manifest-20260314T000500Z.json"
+                                ),
+                                "kind": "full",
+                                "created_at": "20260314T000500Z",
+                            },
+                        ]
+                    ),
+                    "",
+                ),
+                subprocess.CompletedProcess(
+                    ["cmd"],
+                    0,
+                    json.dumps(
+                        [
+                            {
+                                "source_name": "tank/data",
+                                "key": (
+                                    "prefix/subvol/tank/data/incremental/"
+                                    "manifest-20260314T010000Z.json"
+                                ),
+                                "kind": "incremental",
+                                "created_at": "20260314T010000Z",
+                                "is_current": True,
+                            },
+                            {
+                                "source_name": "tank/data",
+                                "key": (
+                                    "prefix/subvol/tank/data/full/"
+                                    "manifest-20260314T000000Z.json"
+                                ),
+                                "kind": "full",
+                                "created_at": "20260314T000000Z",
+                                "is_current": False,
+                            },
+                        ]
+                    ),
+                    "",
+                ),
+                subprocess.CompletedProcess(
+                    ["cmd"],
+                    0,
+                    json.dumps(
+                        [
+                            {
+                                "source_name": "tank/home",
+                                "key": (
+                                    "prefix/subvol/tank/home/full/"
+                                    "manifest-20260314T000500Z.json"
+                                ),
+                                "kind": "full",
+                                "created_at": "20260314T000500Z",
+                                "is_current": True,
+                            },
+                        ]
+                    ),
+                    "",
+                ),
+            ]
+
+            def list_for_prefix(client, bucket, prefix):
+                del client, bucket
+                return list(objects_by_prefix[prefix])
+
+            with mock.patch.object(
+                verify_discovery, "load_config", return_value=config
+            ), mock.patch.object(
+                verify_discovery, "open_log", return_value=log
+            ), mock.patch.object(
+                verify_discovery, "create_s3_client", return_value=object()
+            ), mock.patch.object(
+                verify_discovery, "list_objects", side_effect=list_for_prefix
+            ), mock.patch.object(
+                verify_discovery,
+                "read_object",
+                side_effect=lambda client, bucket, key: current_payloads[key],
+            ), mock.patch.object(
+                verify_discovery,
+                "run_tool",
+                side_effect=tool_results,
+            ) as run_tool_mock, mock.patch.object(
+                verify_discovery.sys,
+                "argv",
+                ["verify_discovery.py", "--config", config_path],
+            ):
+                result = verify_discovery.main()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            run_tool_mock.call_args_list,
+            [
+                mock.call(config_path, ["list-sources"], dry_run=False),
+                mock.call(
+                    config_path,
+                    ["list-manifests", "--source", "tank/data"],
+                    dry_run=False,
+                ),
+                mock.call(
+                    config_path,
+                    ["list-manifests", "--source", "tank/home"],
+                    dry_run=False,
+                ),
             ],
         )
 

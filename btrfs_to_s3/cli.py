@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -14,6 +15,13 @@ from btrfs_to_s3.config import (
     GlobalConfig,
     load_config,
     validate_config,
+)
+from btrfs_to_s3.discovery import (
+    DiscoveryError,
+    get_s3_client,
+    has_aws_credentials,
+    list_available_manifests,
+    list_restorable_sources,
 )
 from btrfs_to_s3.orchestrator import (
     BackupOrchestrator,
@@ -80,6 +88,29 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     restore.set_defaults(wait_restore=None)
 
+    list_sources = subparsers.add_parser(
+        "list-sources", help="list restorable sources from S3"
+    )
+    list_sources.add_argument(
+        "--config", required=True, help="path to config.toml"
+    )
+    list_sources.add_argument("--log-level", help="override log level")
+
+    list_manifests = subparsers.add_parser(
+        "list-manifests", help="list manifests for a source from S3"
+    )
+    list_manifests.add_argument(
+        "--config", required=True, help="path to config.toml"
+    )
+    list_manifests.add_argument("--log-level", help="override log level")
+    list_manifests.add_argument(
+        "--source",
+        "--subvolume",
+        dest="source",
+        required=True,
+        help="source identifier; --subvolume is a compatibility alias",
+    )
+
     if argv is None:
         argv = sys.argv[1:]
     if not argv:
@@ -123,12 +154,16 @@ def main(argv: Iterable[str] | None = None) -> int:
     logging.getLogger(__name__).info(
         "event=command_start command=%s source_filter=%s",
         args.command,
-        args.source,
+        getattr(args, "source", None),
     )
     if args.command == "backup":
         return run_backup(args, config)
     if args.command == "restore":
         return run_restore(args, config)
+    if args.command == "list-sources":
+        return run_list_sources(config)
+    if args.command == "list-manifests":
+        return run_list_manifests(args, config)
     return 2
 
 
@@ -199,3 +234,61 @@ def run_restore(args: argparse.Namespace, config: Config) -> int:
         config, logger=logging.getLogger(__name__)
     )
     return orchestrator.run(request)
+
+
+def run_list_sources(config: Config) -> int:
+    logger = logging.getLogger(__name__)
+    client = _init_discovery_client(config, logger)
+    if client is None:
+        return 1
+    try:
+        sources = list_restorable_sources(
+            client,
+            config.s3.bucket,
+            config.s3.prefix,
+        )
+    except DiscoveryError as exc:
+        logger.error("event=list_sources_failed error=%s", exc)
+        return 1
+    _write_json([item.to_dict() for item in sources])
+    return 0
+
+
+def run_list_manifests(args: argparse.Namespace, config: Config) -> int:
+    logger = logging.getLogger(__name__)
+    client = _init_discovery_client(config, logger)
+    if client is None:
+        return 1
+    try:
+        manifests = list_available_manifests(
+            client,
+            config.s3.bucket,
+            config.s3.prefix,
+            args.source,
+        )
+    except DiscoveryError as exc:
+        logger.error("event=list_manifests_failed error=%s", exc)
+        return 1
+    _write_json([item.to_dict() for item in manifests])
+    return 0
+
+
+def _init_discovery_client(config: Config, logger: logging.Logger):
+    try:
+        has_credentials = has_aws_credentials()
+    except RuntimeError as exc:
+        logger.error("event=discovery_s3_client_failed error=%s", exc)
+        return None
+    if not has_credentials:
+        logger.error("event=discovery_no_credentials status=failed")
+        return None
+    try:
+        return get_s3_client(config.s3.region)
+    except RuntimeError as exc:
+        logger.error("event=discovery_s3_client_failed error=%s", exc)
+        return None
+
+
+def _write_json(payload: object) -> None:
+    json.dump(payload, sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")

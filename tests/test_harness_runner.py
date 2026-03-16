@@ -103,6 +103,7 @@ class RunAllTests(unittest.TestCase):
 
         self.assertEqual(steps[0], ("setup", "setup_btrfs.py", []))
         self.assertIn(("full", "run_full.py", []), steps)
+        self.assertIn(("verify_discovery", "verify_discovery.py", []), steps)
         self.assertIn(
             ("restore_reconstructed", "run_restore.py", ["--use-incremental-manifest"]),
             steps,
@@ -126,6 +127,7 @@ class RunAllTests(unittest.TestCase):
                 ("incremental", "run_incremental.py", ["--skip-mutate"]),
                 ("interrupt", "run_interrupt.py", []),
                 ("verify_manifest", "verify_manifest.py", []),
+                ("verify_discovery", "verify_discovery.py", []),
                 ("verify_s3", "verify_s3.py", []),
                 ("verify_retention", "verify_retention.py", []),
                 (
@@ -204,6 +206,7 @@ class RunAllTests(unittest.TestCase):
                 ("incremental", "run_incremental.py", ["--skip-mutate"], False),
                 ("interrupt", "run_interrupt.py", [], False),
                 ("verify_manifest", "verify_manifest.py", [], False),
+                ("verify_discovery", "verify_discovery.py", [], False),
                 ("verify_s3", "verify_s3.py", [], False),
                 ("verify_retention", "verify_retention.py", [], False),
                 (

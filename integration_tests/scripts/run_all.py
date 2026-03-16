@@ -121,6 +121,7 @@ def _build_steps(
                     ("incremental", "run_incremental.py", ["--skip-mutate"]),
                     ("interrupt", "run_interrupt.py", []),
                     ("verify_manifest", "verify_manifest.py", []),
+                    ("verify_discovery", "verify_discovery.py", []),
                     ("verify_s3", "verify_s3.py", []),
                     ("verify_retention", "verify_retention.py", []),
                     (
@@ -146,6 +147,7 @@ def _build_steps(
                     ("incremental", "run_incremental.py", ["--skip-mutate"]),
                     ("interrupt", "run_interrupt.py", []),
                     ("verify_manifest", "verify_manifest.py", []),
+                    ("verify_discovery", "verify_discovery.py", []),
                     ("verify_s3", "verify_s3.py", []),
                     ("verify_retention", "verify_retention.py", []),
                     (
