@@ -146,6 +146,9 @@ class BtrfsRestoreOperations(RestoreOperations):
         self._popen = popen or subprocess.Popen
         self._runner = runner or subprocess.run
 
+    def validate_restore_target(self, target: Path) -> None:
+        del target
+
     def open_receive(
         self,
         target: Path,

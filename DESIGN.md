@@ -344,6 +344,9 @@ ZFS:
 - The requested `--target` path must live under `restore.target_base_dir`.
 - The relative path under that base becomes child datasets under
   `zfs.receive_parent_dataset`.
+- The mapped target dataset must not already exist; restore does not overwrite
+  an existing ZFS dataset even when its mountpoint is unavailable at the target
+  path.
 - Example: `receive_parent_dataset = "tank/restore"` and
   `target_base_dir = "/tank/restore"` means `--target /tank/restore/data/app`
   restores into dataset `tank/restore/data/app`.

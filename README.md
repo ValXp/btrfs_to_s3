@@ -265,9 +265,12 @@ You can copy `config.example.toml` as a starting point.
   `btrfs subvolume show`.
 - ZFS restores must target a path under `restore.target_base_dir`. The relative
   path beneath that base is mapped onto child datasets of
-  `zfs.receive_parent_dataset`, then the restored dataset is made writable and
-  verified with `zfs get`. `zfs.receive_parent_dataset` is therefore required
-  for ZFS restores even though backup-only configs may omit it.
+  `zfs.receive_parent_dataset`. The mapped target dataset must not already
+  exist, even if it is currently unmounted or mounted somewhere else, because
+  restores will not overwrite an existing dataset. After receive, the restored
+  dataset is made writable and verified with `zfs get`.
+  `zfs.receive_parent_dataset` is therefore required for ZFS restores even
+  though backup-only configs may omit it.
 
 ### Verification semantics
 

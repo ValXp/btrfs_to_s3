@@ -300,6 +300,20 @@ class ZFSRestoreOperationsTests(unittest.TestCase):
 
         self.assertIn("/tank/restore", str(context.exception))
 
+    def test_validate_restore_target_rejects_existing_dataset(self) -> None:
+        operations = ZFSRestoreOperations(
+            receive_parent_dataset="tank/restore",
+            restore_base_dir=Path("/tank/restore"),
+            popen=mock.Mock(),
+        )
+
+        with mock.patch.object(operations, "_dataset_exists", return_value=True):
+            with self.assertRaises(RestoreBackendError) as context:
+                operations.validate_restore_target(Path("/tank/restore/data"))
+
+        self.assertIn("cannot be overwritten", str(context.exception))
+        self.assertIn("tank/restore/data", str(context.exception))
+
     def test_cleanup_receive_destroys_partial_dataset(self) -> None:
         class FakeProcess:
             def __init__(self) -> None:

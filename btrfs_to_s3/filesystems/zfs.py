@@ -208,6 +208,13 @@ class ZFSRestoreOperations(RestoreOperations):
         self._active_receives: dict[int, _ReceiveContext] = {}
         self._active_verify_sources: dict[str, str] = {}
 
+    def validate_restore_target(self, target: Path) -> None:
+        dataset = self._target_dataset(target)
+        if self._dataset_exists(dataset):
+            raise RestoreBackendError(
+                f"restore target dataset already exists and cannot be overwritten: {dataset}"
+            )
+
     def open_receive(
         self,
         target: Path,

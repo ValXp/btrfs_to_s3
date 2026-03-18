@@ -90,6 +90,9 @@ class SendOperations(Protocol):
 class RestoreOperations(Protocol):
     """Restore operations exposed by a filesystem backend."""
 
+    def validate_restore_target(self, target: Path) -> None:
+        """Validate a restore target before the manifest chain begins."""
+
     def open_receive(
         self,
         target: Path,
