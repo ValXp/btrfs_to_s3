@@ -416,6 +416,24 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(config_module.ConfigError):
             config_module.Config.from_dict(data)
 
+    def test_rejects_non_boolean_s3_spool_enabled(self) -> None:
+        data = self._valid_data()
+        data["s3"]["spool_enabled"] = "false"
+        with self.assertRaisesRegex(
+            config_module.ConfigError,
+            r"s3\.spool_enabled must be true or false",
+        ):
+            config_module.Config.from_dict(data)
+
+    def test_rejects_non_boolean_restore_wait_for_restore(self) -> None:
+        data = self._valid_data()
+        data["restore"]["wait_for_restore"] = "false"
+        with self.assertRaisesRegex(
+            config_module.ConfigError,
+            r"restore\.wait_for_restore must be true or false",
+        ):
+            config_module.Config.from_dict(data)
+
     def test_rejects_invalid_restore_mode(self) -> None:
         data = self._valid_data()
         data["restore"]["verify_mode"] = "bad"
