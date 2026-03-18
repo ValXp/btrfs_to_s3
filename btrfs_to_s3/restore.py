@@ -331,6 +331,10 @@ def restore_chain(
 ) -> int:
     if target.exists():
         raise RestoreError(f"target path already exists: {target}")
+    try:
+        restore_operations.validate_restore_target(target)
+    except RestoreBackendError as exc:
+        raise RestoreError(str(exc)) from exc
     total_bytes = 0
     applied_any = False
     for manifest in manifests:

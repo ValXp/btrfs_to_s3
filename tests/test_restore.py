@@ -972,6 +972,7 @@ class RestoreTests(unittest.TestCase):
                 )
 
             self.assertEqual(total, 123)
+            operations.validate_restore_target.assert_called_once_with(target)
             operations.finalize_restore.assert_called_once_with(target)
 
     def test_restore_chain_waits_before_each_manifest(self) -> None:
@@ -1015,6 +1016,7 @@ class RestoreTests(unittest.TestCase):
 
             self.assertEqual(total, 3)
             self.assertEqual(ensure.call_count, 2)
+            operations.validate_restore_target.assert_called_once_with(target)
             operations.finalize_restore.assert_called_once_with(target)
 
     def test_restore_chain_rejects_existing_target(self) -> None:
@@ -1041,6 +1043,39 @@ class RestoreTests(unittest.TestCase):
                     restore_timeout_seconds=1,
                 )
         self.assertIn("already exists", str(context.exception))
+
+    def test_restore_chain_rejects_backend_existing_target(self) -> None:
+        client = FakeS3()
+        manifest = restore.ManifestInfo(
+            key="manifest.json",
+            kind="full",
+            parent_manifest=None,
+            chunks=(),
+            s3={},
+            snapshot_path="/snapshots/data__20260101T000000Z__full",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "target"
+            operations = mock.Mock()
+            operations.validate_restore_target.side_effect = RestoreBackendError(
+                "restore target dataset already exists and cannot be overwritten: tank/restore/data"
+            )
+
+            with mock.patch("btrfs_to_s3.restore._apply_manifest_stream") as apply_mock:
+                with self.assertRaises(restore.RestoreError) as context:
+                    restore.restore_chain(
+                        client,
+                        "bucket",
+                        [manifest],
+                        target,
+                        wait_for_restore=False,
+                        restore_tier="Standard",
+                        restore_timeout_seconds=1,
+                        restore_operations=operations,
+                    )
+
+        apply_mock.assert_not_called()
+        self.assertIn("cannot be overwritten", str(context.exception))
 
     def test_restore_chain_requires_created_subvolume(self) -> None:
         client = FakeS3()
