@@ -68,7 +68,14 @@ python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --source ta
 # Restore from a specific manifest key and skip verification.
 python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --source data --target /srv/restore/data \
   --manifest-key subvol/data/full/manifest-20260101T000000Z.json --verify none
+
+# Wait at most six hours for archive restores before failing.
+python3 -m btrfs_to_s3 restore --config /etc/btrfs_to_s3/config.toml --source data --target /srv/restore/data \
+  --restore-timeout 6h
 ```
+
+`--restore-timeout` accepts raw integer seconds for backward compatibility and
+duration strings such as `30m`, `6h`, or `2d`.
 
 Discovery commands inspect S3 directly and print JSON to stdout:
 

@@ -226,7 +226,8 @@ planner compatibility and legacy state upgrades.
   - `--manifest-key` (optional): explicit manifest to restore; when omitted,
     restore resolves `current.json` for the selected source.
   - `--wait-restore` (default on): request/await S3 restore for archival storage.
-  - `--restore-timeout` (e.g., `6h`): max time to wait for S3 restore readiness.
+  - `--restore-timeout` (e.g., `6h`, `30m`, or raw seconds): max time to wait
+    for S3 restore readiness.
   - `--verify` (default on): run metadata + content verification.
 - Discovery output:
   - `list-sources` prints JSON describing each discovered source's
