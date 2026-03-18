@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from btrfs_to_s3.config import (
     Config,
@@ -17,7 +18,7 @@ from btrfs_to_s3.config import (
     SubvolumesConfig,
     ZFSConfig,
 )
-from btrfs_to_s3.planner import plan_backups
+from btrfs_to_s3.planner import _parse_iso_timestamp, plan_backups
 from btrfs_to_s3.state import SourceState, State
 
 LOCAL_TZ = timezone(timedelta(hours=-7))
@@ -108,6 +109,24 @@ def make_zfs_config() -> Config:
 
 
 class PlannerTests(unittest.TestCase):
+    def test_parse_iso_timestamp_accepts_compact_utc_form_without_fromisoformat(self) -> None:
+        class Py310StyleDateTime:
+            @staticmethod
+            def strptime(value: str, fmt: str) -> datetime:
+                return datetime.strptime(value, fmt)
+
+            @staticmethod
+            def fromisoformat(value: str) -> datetime:
+                raise AssertionError("compact timestamps should not use fromisoformat")
+
+        with mock.patch("btrfs_to_s3.planner.datetime", Py310StyleDateTime):
+            parsed = _parse_iso_timestamp("20260110T090000Z")
+
+        self.assertEqual(
+            parsed,
+            datetime(2026, 1, 10, 9, 0, tzinfo=timezone.utc),
+        )
+
     def test_before_run_at_skips_with_scheduled_reason(self) -> None:
         config = make_config()
         now = datetime(2026, 1, 10, 1, 30, tzinfo=LOCAL_TZ)
