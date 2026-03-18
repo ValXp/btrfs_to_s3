@@ -1334,6 +1334,10 @@ class OrchestratorBackupTests(unittest.TestCase):
             self.assertEqual(total_bytes, 3)
             self.assertEqual(len(chunks), 1)
             self.assertEqual(len(local_chunks), 1)
+            self.assertEqual(chunks[0].etag, "etag")
+            self.assertEqual(chunks[0].key, "backup/subvol/data/full/chunk-20260101T000000Z-0.bin")
+            self.assertEqual(chunks[0].size, 3)
+            self.assertEqual(chunks[0].sha256, "sha")
 
     def test_write_manifest_creates_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
