@@ -154,13 +154,13 @@ class S3Uploader:
                 UploadId=upload_id,
             )
             raise UploadError(f"multipart upload failed: {exc}") from exc
-        self.client.complete_multipart_upload(
+        response = self.client.complete_multipart_upload(
             Bucket=self.bucket,
             Key=key,
             UploadId=upload_id,
             MultipartUpload={"Parts": self._ordered_parts(parts)},
         )
-        return UploadResult(key=key, size=total_size, etag=None)
+        return UploadResult(key=key, size=total_size, etag=response.get("ETag"))
 
     def _upload_part_with_retry(
         self,

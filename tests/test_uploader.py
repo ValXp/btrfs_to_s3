@@ -31,7 +31,7 @@ class FakeClient:
 
     def complete_multipart_upload(self, **kwargs):
         self.calls.append(("complete_multipart_upload", kwargs))
-        return {}
+        return {"ETag": "etag-complete"}
 
     def abort_multipart_upload(self, **kwargs):
         self.calls.append(("abort_multipart_upload", kwargs))
@@ -110,6 +110,7 @@ class UploaderTests(unittest.TestCase):
         )
         result = uploader.upload_stream("key", io.BytesIO(payload))
         self.assertEqual(result.size, len(payload))
+        self.assertEqual(result.etag, "etag-complete")
         upload_calls = [call for call in client.calls if call[0] == "upload_part"]
         sizes = [len(call[1]["Body"]) for call in upload_calls]
         self.assertEqual(sizes, [5 * 1024 * 1024, 1])
