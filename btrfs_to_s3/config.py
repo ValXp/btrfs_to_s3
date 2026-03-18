@@ -195,8 +195,9 @@ class Config:
                 s3_data.get("storage_class_manifest", DEFAULT_STORAGE_CLASS_MANIFEST)
             ),
             concurrency=int(s3_data.get("concurrency", DEFAULT_S3_CONCURRENCY)),
-            spool_enabled=bool(
-                s3_data.get("spool_enabled", DEFAULT_S3_SPOOL_ENABLED)
+            spool_enabled=_load_bool(
+                s3_data.get("spool_enabled", DEFAULT_S3_SPOOL_ENABLED),
+                "s3.spool_enabled",
             ),
             sse=str(s3_data.get("sse", DEFAULT_S3_SSE)),
         )
@@ -214,10 +215,11 @@ class Config:
                     "sample_max_files", DEFAULT_RESTORE_SAMPLE_MAX_FILES
                 )
             ),
-            wait_for_restore=bool(
+            wait_for_restore=_load_bool(
                 restore_data.get(
                     "wait_for_restore", DEFAULT_RESTORE_WAIT_FOR_RESTORE
-                )
+                ),
+                "restore.wait_for_restore",
             ),
             restore_timeout_seconds=int(
                 restore_data.get(
@@ -319,6 +321,8 @@ def validate_config(config: Config) -> None:
     _validate_positive(
         config.restore.restore_timeout_seconds, "restore.restore_timeout_seconds"
     )
+    if not isinstance(config.restore.wait_for_restore, bool):
+        raise ConfigError("restore.wait_for_restore must be true or false")
     if not config.restore.restore_tier:
         raise ConfigError("restore.restore_tier is required")
 
@@ -358,6 +362,12 @@ def _load_subvolume_paths(
     if not isinstance(raw_paths, list):
         raise ConfigError("subvolumes.paths must be a list of paths")
     return tuple(_expand_path(path) for path in raw_paths)
+
+
+def _load_bool(raw: Any, field: str) -> bool:
+    if not isinstance(raw, bool):
+        raise ConfigError(f"{field} must be true or false")
+    return raw
 
 
 def _load_zfs_config(raw: Any, backend: str) -> ZFSConfig | None:

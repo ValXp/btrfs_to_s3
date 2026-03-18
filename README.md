@@ -247,14 +247,14 @@ You can copy `config.example.toml` as a starting point.
 - `s3.storage_class_chunks`: default `DEEP_ARCHIVE`; storage class for chunk objects (archive classes may require restores).
 - `s3.storage_class_manifest`: default `STANDARD`; storage class for manifest/current objects.
 - `s3.concurrency`: default `4`; must be >= 1; number of multipart part uploads in flight (further capped by spooling limits).
-- `s3.spool_enabled`: default `false`; when true, multipart parts are spooled to disk under `global.spool_dir` instead of kept in memory.
+- `s3.spool_enabled`: default `false`; must be a TOML boolean (`true` or `false`). When true, multipart parts are spooled to disk under `global.spool_dir` instead of kept in memory.
 - `s3.sse`: default `AES256`; server-side encryption setting sent to S3.
 
 `restore`:
 - `restore.target_base_dir`: default `/srv/restore`; absolute base directory for restore targets when not overridden by tooling.
 - `restore.verify_mode`: default `full`; one of `full|sample|none`; controls post-restore verification. Metadata checks always run unless set to `none`. ZFS content verification may create and destroy a temporary clone when `.zfs/snapshot/<name>` is unavailable on the restore host.
 - `restore.sample_max_files`: default `1000`; must be > 0; maximum files hashed in `sample` mode.
-- `restore.wait_for_restore`: default `true`; wait for archive-class restores to become available before downloading.
+- `restore.wait_for_restore`: default `true`; must be a TOML boolean (`true` or `false`). Wait for archive-class restores to become available before downloading.
 - `restore.restore_timeout_seconds`: default `259200` (72 hours); must be > 0; timeout while waiting for archive restores.
 - `restore.restore_tier`: default `Standard`; restore tier used for archival storage classes.
 
