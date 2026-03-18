@@ -11,6 +11,8 @@ from btrfs_to_s3.config import Config
 from btrfs_to_s3.snapshots import parse_snapshot_name
 from btrfs_to_s3.state import State
 
+_COMPACT_UTC_TIMESTAMP = "%Y%m%dT%H%M%SZ"
+
 
 @dataclass(frozen=True, init=False)
 class PlanItem:
@@ -200,6 +202,12 @@ def _btrfs_source_name(path: Path) -> str:
 def _parse_iso_timestamp(value: str | None) -> datetime | None:
     if not value:
         return None
+    try:
+        return datetime.strptime(value, _COMPACT_UTC_TIMESTAMP).replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        pass
     cleaned = value.replace("Z", "+00:00")
     try:
         parsed = datetime.fromisoformat(cleaned)
