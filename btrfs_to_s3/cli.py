@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -29,6 +30,14 @@ from btrfs_to_s3.orchestrator import (
     RestoreOrchestrator,
     RestoreRequest,
 )
+
+_DURATION_UNITS = {
+    "s": 1,
+    "m": 60,
+    "h": 60 * 60,
+    "d": 24 * 60 * 60,
+}
+_DURATION_PART_RE = re.compile(r"(?P<value>\d+)(?P<unit>[smhdSMHD])")
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
@@ -66,8 +75,11 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     restore.add_argument(
         "--restore-timeout",
-        type=int,
-        help="max seconds to wait for archive restore",
+        type=_parse_restore_timeout,
+        help=(
+            "max time to wait for archive restore "
+            "(seconds or durations like 6h or 30m)"
+        ),
     )
     restore.add_argument(
         "--wait-restore",
@@ -219,6 +231,35 @@ def _parse_level(value: str) -> int:
     if normalized not in mapping:
         raise ConfigError(f"invalid log level: {value}")
     return mapping[normalized]
+
+
+def _parse_restore_timeout(value: str) -> int:
+    error_message = (
+        "restore timeout must be a positive integer number of seconds or "
+        "a duration like 6h or 30m"
+    )
+    normalized = value.strip()
+    if not normalized:
+        raise argparse.ArgumentTypeError(error_message)
+    if normalized.isdigit():
+        seconds = int(normalized)
+        if seconds <= 0:
+            raise argparse.ArgumentTypeError(error_message)
+        return seconds
+
+    total_seconds = 0
+    offset = 0
+    for match in _DURATION_PART_RE.finditer(normalized):
+        if match.start() != offset:
+            raise argparse.ArgumentTypeError(error_message)
+        total_seconds += int(match.group("value")) * _DURATION_UNITS[
+            match.group("unit").lower()
+        ]
+        offset = match.end()
+
+    if offset != len(normalized) or total_seconds <= 0:
+        raise argparse.ArgumentTypeError(error_message)
+    return total_seconds
 
 
 def run_restore(args: argparse.Namespace, config: Config) -> int:

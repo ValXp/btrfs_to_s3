@@ -234,6 +234,22 @@ class CliTests(unittest.TestCase):
         self.assertIsNone(args.source)
         self.assertEqual(args.manifest_key, "subvol/data/full/manifest.json")
 
+    def test_parse_restore_args_accepts_duration_timeout(self) -> None:
+        args = cli.parse_args(
+            [
+                "restore",
+                "--config",
+                "/tmp/config.toml",
+                "--source",
+                "data",
+                "--target",
+                "/srv/restore/data",
+                "--restore-timeout",
+                "1h30m",
+            ]
+        )
+        self.assertEqual(args.restore_timeout, 5400)
+
     def test_parse_restore_args_requires_source_without_manifest_key(self) -> None:
         stderr = io.StringIO()
         with redirect_stderr(stderr):
@@ -250,6 +266,29 @@ class CliTests(unittest.TestCase):
         self.assertEqual(context.exception.code, 2)
         self.assertIn(
             "restore requires --source unless --manifest-key is provided",
+            stderr.getvalue(),
+        )
+
+    def test_parse_restore_args_rejects_invalid_restore_timeout(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as context:
+                cli.parse_args(
+                    [
+                        "restore",
+                        "--config",
+                        "/tmp/config.toml",
+                        "--source",
+                        "data",
+                        "--target",
+                        "/srv/restore/data",
+                        "--restore-timeout",
+                        "0",
+                    ]
+                )
+        self.assertEqual(context.exception.code, 2)
+        self.assertIn(
+            "restore timeout must be a positive integer number of seconds",
             stderr.getvalue(),
         )
 
