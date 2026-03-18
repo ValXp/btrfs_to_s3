@@ -145,6 +145,12 @@ class S3Uploader:
                         self._drain_in_flight(in_flight, parts, use_spool)
                 while in_flight:
                     self._drain_in_flight(in_flight, parts, use_spool)
+            self.client.complete_multipart_upload(
+                Bucket=self.bucket,
+                Key=key,
+                UploadId=upload_id,
+                MultipartUpload={"Parts": self._ordered_parts(parts)},
+            )
         except Exception as exc:
             if use_spool:
                 self._cleanup_in_flight(in_flight)
@@ -154,12 +160,6 @@ class S3Uploader:
                 UploadId=upload_id,
             )
             raise UploadError(f"multipart upload failed: {exc}") from exc
-        self.client.complete_multipart_upload(
-            Bucket=self.bucket,
-            Key=key,
-            UploadId=upload_id,
-            MultipartUpload={"Parts": self._ordered_parts(parts)},
-        )
         return UploadResult(key=key, size=total_size, etag=None)
 
     def _upload_part_with_retry(

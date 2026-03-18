@@ -206,8 +206,8 @@ planner compatibility and legacy state upgrades.
 - Max in-flight parts: `s3.concurrency` (defaults to 4).
 - Retry: 5 attempts per part with exponential backoff (base 1s, cap 30s) and
   jitter.
-- Failure: abort multipart upload on exhausted retries; rerun restarts the
-  backup stream from scratch.
+- Failure: abort multipart upload on part upload or completion failure; rerun
+  restarts the backup stream from scratch.
 
 ## Security
 - Use SSE-S3 (AES256) for all uploaded objects.
