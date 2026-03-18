@@ -12,8 +12,9 @@ from btrfs_to_s3.uploader import RetryPolicy, S3Uploader, UploadError
 
 
 class FakeClient:
-    def __init__(self, failures: int = 0) -> None:
+    def __init__(self, failures: int = 0, fail_complete: bool = False) -> None:
         self.failures = failures
+        self.fail_complete = fail_complete
         self.calls: list[tuple[str, dict]] = []
         self.upload_calls = 0
 
@@ -31,6 +32,8 @@ class FakeClient:
 
     def complete_multipart_upload(self, **kwargs):
         self.calls.append(("complete_multipart_upload", kwargs))
+        if self.fail_complete:
+            raise RuntimeError("complete failed")
         return {}
 
     def abort_multipart_upload(self, **kwargs):
@@ -175,6 +178,27 @@ class UploaderTests(unittest.TestCase):
         )
         with self.assertRaises(UploadError):
             uploader.upload_bytes("key", b"abcdefghij")
+        self.assertTrue(
+            any(call[0] == "abort_multipart_upload" for call in client.calls)
+        )
+
+    def test_multipart_aborts_when_completion_fails(self) -> None:
+        client = FakeClient(fail_complete=True)
+        policy = RetryPolicy(max_attempts=2, sleep=lambda _: None, jitter=lambda d: d)
+        uploader = S3Uploader(
+            client=client,
+            bucket="bucket",
+            storage_class="STANDARD",
+            sse="AES256",
+            part_size=4,
+            multipart_threshold=5,
+            retry_policy=policy,
+        )
+        with self.assertRaises(UploadError):
+            uploader.upload_bytes("key", b"abcdefghij")
+        self.assertTrue(
+            any(call[0] == "complete_multipart_upload" for call in client.calls)
+        )
         self.assertTrue(
             any(call[0] == "abort_multipart_upload" for call in client.calls)
         )
